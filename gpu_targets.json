@@ -1,0 +1,42 @@
+[
+  {
+    "id": "ed563892-aacd-40f5-80b7-90c9be6c759b",
+    "name": "RTX 4090 (24 GB)"
+  },
+  {
+    "id": "0d062939-7c01-4aae-a2b1-30e315124e51",
+    "name": "RTX 4080 (16 GB)"
+  },
+  {
+    "id": "f1380143-51cd-4bad-80cb-1f86ee6b49fe",
+    "name": "RTX 4070 Ti Super (16 GB)"
+  },
+  {
+    "id": "de00c90b-904b-4d9e-8fc9-1d9a08eb0932",
+    "name": "RTX 4070 Ti (12 GB)"
+  },
+  {
+    "id": "0798d5aa-2d17-42ee-81b8-ea92e3bc088e",
+    "name": "RTX 4070 (12 GB)"
+  },
+  {
+    "id": "2b73eef8-be49-4667-8fc0-5c0cb127cfe0",
+    "name": "RTX 4060 Ti (16 GB)"
+  },
+  {
+    "id": "a5db5c50-cbcb-4596-ae80-6a0c8090d80f",
+    "name": "RTX 3090 (24 GB)"
+  },
+  {
+    "id": "65247de0-746f-45c6-8537-650ba613966a",
+    "name": "RTX 3080 Ti (12 GB)"
+  },
+  {
+    "id": "43a49c0c-f860-40e9-a509-702d0dba0902",
+    "name": "RTX 3080 (10 GB)"
+  },
+  {
+    "id": "f51baccc-dc95-40fb-a5d1-6d0ee0db31d2",
+    "name": "RTX 3060 (12 GB)"
+  }
+]

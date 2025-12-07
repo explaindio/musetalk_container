@@ -1,0 +1,53 @@
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
+
+WORKDIR /app
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 python3-venv python3-pip ffmpeg git time curl && \
+    rm -rf /var/lib/apt/lists/*
+
+# Copy MuseTalk repo (including models we already downloaded)
+COPY MuseTalk /app
+
+# Copy worker application
+COPY worker_app /app/worker_app
+
+# Create virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:${PATH}"
+
+# Install core Python deps for MuseTalk + worker
+RUN pip install --upgrade pip && \
+    pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.2+cu118 \
+        --index-url https://download.pytorch.org/whl/cu118 && \
+    pip install -r requirements.txt
+
+# Install MMLab stack (matching benchmark image)
+RUN pip install --no-cache-dir -U openmim && \
+    mim install mmengine && \
+    mim install "mmcv==2.0.1" && \
+    mim install "mmdet==3.1.0"
+
+# mmpose + chumpy dependency
+RUN pip install --no-build-isolation chumpy==0.70 && \
+    mim install "mmpose==1.1.0"
+
+# Install Salad HTTP Job Queue Worker binary
+# Use an explicit versioned tarball and fail the build on any HTTP or checksum errors.
+RUN set -e; \
+    curl -fL \
+      https://github.com/SaladTechnologies/salad-cloud-job-queue-worker/releases/download/v0.5.0/salad-http-job-queue-worker_x86_64.tar.gz \
+      -o /tmp/salad-http-job-queue-worker_x86_64.tar.gz; \
+    echo 'd6d4485bc63d65e4c1322a49a7f94f6acb84b663bd7c0f80baa5be2095266585  /tmp/salad-http-job-queue-worker_x86_64.tar.gz' > /tmp/worker.sha256; \
+    sha256sum -c /tmp/worker.sha256; \
+    tar -xzf /tmp/salad-http-job-queue-worker_x86_64.tar.gz -C /usr/local/bin; \
+    rm /tmp/salad-http-job-queue-worker_x86_64.tar.gz /tmp/worker.sha256; \
+    chmod +x /usr/local/bin/salad-http-job-queue-worker
+
+# Simple entrypoint script to run both the queue worker and the FastAPI app
+COPY run_worker.sh /app/run_worker.sh
+RUN chmod +x /app/run_worker.sh
+
+ENV MUSETALK_WORKDIR=/app
+
+ENTRYPOINT ["/app/run_worker.sh"]

@@ -1,0 +1,14 @@
+.env
+*.log
+*.csv
+*.html
+*.yaml
+*.yml
+*.mp4
+*.wav
+*.pyc
+__pycache__/
+*.pid
+MuseTalk/
+archived-old-orchestratory/
+salad_management_archive/
