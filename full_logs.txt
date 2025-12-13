@@ -1,0 +1,6 @@
+INFO:     Started server process [8]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://0.0.0.0:8000 (Press CTRL+C to quit)
+2025/12/11 22:16:06 ERROR failed to fetch workload instance status error="Get \"http://169.254.169.254:80/v1/status\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"
+2025/12/11 22:18:16 ERROR failed to fetch workload instance status error="Get \"http://169.254.169.254:80/v1/status\": context deadline exceeded (Client.Timeout exceeded while awaiting headers)"

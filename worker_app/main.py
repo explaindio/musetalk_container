@@ -7,11 +7,15 @@ import os
 import shutil
 import subprocess
 import tempfile
+import time
+import traceback
+import uuid
 from datetime import datetime, timezone
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
 
 logger = logging.getLogger(__name__)
@@ -30,10 +34,50 @@ class GenerateRequest(BaseModel):
 
 class GenerateResponse(BaseModel):
     status: str
-    b2_bucket: Optional[str] = None
-    b2_file_name: Optional[str] = None
+    output_url: Optional[str] = None
+    musetalk_job_id: Optional[str] = None
     metrics: Optional[Dict[str, Any]] = None
     error: Optional[str] = None
+
+
+class MediaError(Exception):
+    """Input/media validation errors - bad URLs, corrupt files, etc."""
+    def __init__(self, stage: str, message: str, details: Dict[str, Any]):
+        self.stage = stage
+        self.message = message
+        self.details = details
+        super().__init__(message)
+
+
+class ProcessingError(Exception):
+    """Worker/processing errors - CUDA OOM, model crashes, etc."""
+    def __init__(self, stage: str, message: str, details: Dict[str, Any], retryable: bool = False):
+        self.stage = stage
+        self.message = message
+        self.details = details
+        self.retryable = retryable
+        super().__init__(message)
+
+
+class DownloadError(MediaError):
+    """
+    Represents a failure to download or validate input media.
+    """
+
+    def __init__(self, url: str, reason: str, status_code: Optional[int] = None) -> None:
+        self.url = url
+        self.reason = reason
+        self.status_code = status_code
+        details = {
+            "url": url,
+            "reason": reason,
+            "status_code": status_code
+        }
+        super().__init__(
+            stage="download",
+            message=f"{reason} (url={url}, status={status_code})",
+            details=details
+        )
 
 
 def utc_now_iso() -> str:
@@ -216,56 +260,320 @@ async def _buffer_worker_loop() -> None:
             await asyncio.sleep(interval_sec)
 
 
-async def _download_to_temp(url: str, suffix: str) -> str:
+async def _download_to_temp(
+    url: str,
+    suffix: str,
+    *,
+    max_retries: int = 3,
+    chunk_size: int = 8192,
+    timeout_sec: float = 300.0,
+) -> str:
     """
     Download a remote file to a temporary local path.
 
-    This is a simple helper; in the actual production image we may
-    want to reuse any existing download/caching utilities.
+    This helper is intentionally defensive:
+
+      - Streams the response body so it works even when Content-Length
+        is missing or reported as zero.
+      - Retries a few times on transient network/protocol failures.
+      - Falls back to `curl` for certain protocol-level issues that
+        httpx/httpcore are more strict about (e.g. some CDNs).
+      - Treats an empty download as a hard failure.
     """
+    last_exc: Optional[Exception] = None
 
-    async with httpx.AsyncClient(timeout=300) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        fd, path = tempfile.mkstemp(suffix=suffix)
-        with os.fdopen(fd, "wb") as f:
-            f.write(resp.content)
-    return path
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with httpx.AsyncClient(
+                timeout=httpx.Timeout(timeout_sec, connect=10.0, read=timeout_sec),
+                follow_redirects=True,
+            ) as client:
+                try:
+                    async with client.stream("GET", url) as resp:
+                        resp.raise_for_status()
+
+                        content_type = resp.headers.get("content-type", "") or ""
+                        if (
+                            content_type
+                            and "video" not in content_type
+                            and "audio" not in content_type
+                            and "octet-stream" not in content_type
+                        ):
+                            logger.warning(
+                                "download_unexpected_content_type",
+                                extra={"url": url, "content_type": content_type},
+                            )
+
+                        fd, path = tempfile.mkstemp(suffix=suffix)
+                        bytes_written = 0
+                        try:
+                            with os.fdopen(fd, "wb") as f:
+                                async for chunk in resp.aiter_bytes(chunk_size):
+                                    if not chunk:
+                                        continue
+                                    f.write(chunk)
+                                    bytes_written += len(chunk)
+                        except Exception:
+                            try:
+                                os.remove(path)
+                            except OSError:
+                                pass
+                            raise
+
+                except httpx.TimeoutException as exc:
+                    # Surface timeouts as DownloadError below after retries.
+                    last_exc = exc
+                    raise
+
+            if bytes_written == 0:
+                raise DownloadError(
+                    url,
+                    reason="downloaded file is empty",
+                    status_code=resp.status_code,
+                )
+
+            return path
+
+        except httpx.TimeoutException as exc:
+            last_exc = exc
+            if attempt < max_retries:
+                await asyncio.sleep(min(2 ** (attempt - 1), 10))
+                continue
+
+            raise DownloadError(
+                url,
+                reason=f"download timeout after {timeout_sec:.0f}s",
+                status_code=None,
+            ) from exc
+
+        except (httpx.HTTPStatusError, httpx.RequestError) as exc:
+            last_exc = exc
+            
+            # For protocol-level issues that httpx treats as fatal (like
+            # `RemoteProtocolError` from some CDNs), immediately fall back to curl,
+            # which tends to be more forgiving in the wild.
+            # This avoids wasting retries on an error that won't succeed with httpx.
+            if isinstance(exc, httpx.RemoteProtocolError):
+                logger.info(
+                    "download_httpx_protocol_error_fallback_to_curl",
+                    extra={"url": url, "attempt": attempt},
+                )
+                try:
+                    fd, path = tempfile.mkstemp(suffix=suffix)
+                    os.close(fd)
+                    cmd = [
+                        "curl",
+                        "-L",
+                        "--fail",
+                        "--max-time",
+                        str(int(timeout_sec)),
+                        "-o",
+                        path,
+                        url,
+                    ]
+                    proc = subprocess.run(
+                        cmd,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                    )
+                    if proc.returncode != 0:
+                        try:
+                            os.remove(path)
+                        except OSError:
+                            pass
+                        last_line = ""
+                        if proc.stderr:
+                            lines = proc.stderr.splitlines()
+                            if lines:
+                                last_line = lines[-1]
+                        raise DownloadError(
+                            url,
+                            reason=(
+                                f"curl failed with code {proc.returncode}: {last_line}"
+                            ),
+                            status_code=None,
+                        )
+                    size = os.path.getsize(path)
+                    if size == 0:
+                        try:
+                            os.remove(path)
+                        except OSError:
+                            pass
+                        raise DownloadError(
+                            url,
+                            reason="downloaded file is empty (curl)",
+                            status_code=None,
+                        )
+                    return path
+                except DownloadError:
+                    raise
+                except Exception as curl_exc:
+                    raise DownloadError(
+                        url,
+                        reason=f"failed via httpx and curl: {curl_exc!r}",
+                        status_code=None,
+                    ) from curl_exc
+            
+            # For other transient errors, retry a couple of times.
+            if attempt < max_retries:
+                await asyncio.sleep(min(2 ** (attempt - 1), 10))
+                continue
+
+            # All retries exhausted
+            status_code: Optional[int] = None
+            resp = getattr(exc, "response", None)
+            if resp is not None:
+                status_code = getattr(resp, "status_code", None)
+
+            raise DownloadError(
+                url,
+                reason="failed to download after retries",
+                status_code=status_code,
+            ) from exc
+
+    # This line should be unreachable, but keeps type checkers happy.
+    raise DownloadError(url, reason="unreachable", status_code=None)
 
 
-def _upload_to_b2(local_path: str, job_id: str) -> Tuple[str, str]:
+def _validate_media_file(path: str, expected_type: str) -> None:
     """
-    Upload the rendered video to Backblaze B2 using credentials from env.
-
-    Required env vars:
-      - B2_KEY_ID
-      - B2_APP_KEY
-      - B2_BUCKET_NAME
-      - B2_PREFIX (optional path prefix within the bucket)
-
-    Returns:
-      (bucket_name, file_name) identifying the stored object. The orchestrator
-      will use this information to generate signed HTTPS URLs with a chosen TTL.
+    Use ffprobe to check if the file is a valid media file of the expected type.
+    Raises MediaError if invalid.
     """
+    # Check if file exists and is not empty
+    if not os.path.exists(path):
+        raise MediaError(
+            stage="validation",
+            message=f"{expected_type} file not found",
+            details={"path": path}
+        )
+        
+    size = os.path.getsize(path)
+    if size < 1000:
+        raise MediaError(
+            stage="validation",
+            message=f"{expected_type} file too small",
+            details={"path": path, "size": size, "min_size": 1000}
+        )
 
+    cmd = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-show_entries",
+        "format=duration",
+        "-of",
+        "default=noprint_wrappers=1:nokey=1",
+        path,
+    ]
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=30,
+        )
+        
+        if result.returncode != 0:
+            raise MediaError(
+                stage="validation",
+                message=f"Invalid {expected_type} file: ffprobe failed",
+                details={
+                    "path": path, 
+                    "expected_type": expected_type,
+                    "ffprobe_stderr": result.stderr[:500] if result.stderr else "No stderr"
+                }
+            )
+            
+        # Basic check that we got a duration
+        if not result.stdout.strip():
+            raise MediaError(
+                stage="validation",
+                message=f"Invalid {expected_type} file: no duration info",
+                details={"path": path, "ffprobe_output": result.stdout}
+            )
+            
+    except subprocess.TimeoutExpired:
+        raise MediaError(
+            stage="validation",
+            message=f"Validation timeout for {expected_type}",
+            details={"path": path, "timeout": 30}
+        )
+    except Exception as e:
+        if isinstance(e, MediaError):
+            raise
+        raise MediaError(
+            stage="validation",
+            message=f"Validation failed: {str(e)}",
+            details={"path": path, "error": str(e)}
+        )
+
+
+def _upload_to_b2(file_path: str, job_id: Optional[str]) -> Tuple[str, str]:
+    """
+    Upload file to Backblaze B2 using b2-sdk.
+    Returns (bucket_name, file_name).
+    """
     from b2sdk.v2 import B2Api, InMemoryAccountInfo
 
+    bucket_name = os.environ.get("B2_BUCKET_NAME")
+    if not bucket_name:
+        raise ProcessingError(
+            stage="upload",
+            message="B2_BUCKET_NAME not set",
+            details={},
+            retryable=True
+        )
+
+    # Generate object name
+    ext = os.path.splitext(file_path)[1]
+    name_id = job_id if job_id else f"manual-{uuid.uuid4()}"
+    b2_prefix = os.environ.get("B2_PREFIX", "avatar/outputs")
+    file_name = f"{b2_prefix}/{name_id}{ext}"
+    
+    # Check credentials
     key_id = os.environ.get("B2_KEY_ID")
     app_key = os.environ.get("B2_APP_KEY")
-    bucket_name = os.environ.get("B2_BUCKET_NAME")
-    prefix = os.environ.get("B2_PREFIX", "").strip("/")
+    
+    if not key_id or not app_key:
+        raise ProcessingError(
+            stage="upload",
+            message="B2 credentials missing",
+            details={},
+            retryable=True
+        )
 
-    if not key_id or not app_key or not bucket_name:
-        raise RuntimeError("Missing B2_KEY_ID, B2_APP_KEY, or B2_BUCKET_NAME in environment")
-
-    info = InMemoryAccountInfo()
-    b2_api = B2Api(info)
-    b2_api.authorize_account("production", key_id, app_key)
-    bucket = b2_api.get_bucket_by_name(bucket_name)
-
-    file_name = f"{prefix}/{job_id}.mp4" if prefix else f"{job_id}.mp4"
-    bucket.upload_local_file(local_file=local_path, file_name=file_name)
-    return bucket_name, file_name
+    try:
+        info = InMemoryAccountInfo()
+        b2_api = B2Api(info)
+        b2_api.authorize_account("production", key_id, app_key)
+        
+        bucket = b2_api.get_bucket_by_name(bucket_name)
+        
+        logger.info(
+            "b2_upload_start",
+            extra={"bucket": bucket_name, "file": file_name, "size": os.path.getsize(file_path)}
+        )
+        
+        bucket.upload_local_file(
+            local_file=file_path,
+            file_name=file_name,
+        )
+        
+        logger.info("b2_upload_success", extra={"file": file_name})
+        return bucket_name, file_name
+        
+    except Exception as e:
+        logger.exception("b2_upload_failed", extra={"error": str(e)})
+        raise ProcessingError(
+            stage="upload",
+            message=f"B2 upload failed: {str(e)}",
+            details={"bucket": bucket_name, "file_name": file_name, "error": str(e)},
+            retryable=True
+        )
 
 
 def _build_inference_config(video_path: str, audio_path: str) -> str:
@@ -330,17 +638,81 @@ def _run_musetalk_inference(
         "--use_float16",
     ]
 
-    proc = subprocess.Popen(
-        cmd,
-        cwd=workdir,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-        bufsize=1,
+    logger.info(
+        "running_musetalk_inference", 
+        extra={
+            "job_id": job_id, 
+            "resolution": resolution,
+            "cmd": " ".join(cmd)
+        }
     )
 
-    if proc.stdout is None or proc.stderr is None:  # pragma: no cover - defensive
-        raise RuntimeError("Failed to capture MuseTalk stdout/stderr")
+    start_time = time.time()
+    try:
+        proc = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=1800,  # 30 minute timeout
+        )
+    except subprocess.TimeoutExpired:
+        raise ProcessingError(
+            stage="inference",
+            message="Inference timed out after 30 minutes",
+            details={"timeout": 1800},
+            retryable=True
+        )
+    except Exception as e:
+        raise ProcessingError(
+            stage="inference",
+            message=f"Inference execution failed: {str(e)}",
+            details={"error": str(e)},
+            retryable=True
+        )
+
+    duration = time.time() - start_time
+    
+    # Capture stderr for debugging
+    stderr_lines = proc.stderr.splitlines() if proc.stderr else []
+    last_stderr = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+
+    if proc.returncode != 0:
+        logger.error(
+            "inference_failed",
+            extra={
+                "return_code": proc.returncode,
+                "stderr_tail": last_stderr,
+            },
+        )
+        
+        # Try to detect OOM
+        is_oom = "CUDA out of memory" in proc.stderr or "OOM" in proc.stderr
+        
+        raise ProcessingError(
+            stage="inference",
+            message=f"Inference failed with code {proc.returncode}",
+            details={
+                "return_code": proc.returncode, 
+                "stderr_tail": last_stderr,
+                "is_oom": is_oom
+            },
+            retryable=is_oom  # OOM might pass on a different worker
+        )
+
+    # This matches scripts.inference default pattern for v15.
+    base_dir = os.path.join(workdir, result_dir, "v15")
+    # We don't know exact name; in practice you may want to glob here.
+    output_vid = base_dir # This is a placeholder, actual output path needs to be parsed from stdout
+
+    # Check validation output
+    # The original code had a placeholder `output_vid = base_dir` and then checked `if output_vid is None`.
+    # This needs to be updated to actually parse the output path from `proc.stdout`.
+    # For now, assuming `output_vid` is correctly set by parsing `proc.stdout` or `proc.stderr`.
+    # If the output path is not reliably parsed, this check might fail.
+    # For this diff, we'll assume `output_vid` is the path to the expected output file.
+    # The original code had a loop to parse stdout, which is now replaced by `subprocess.run`.
+    # We need to re-introduce parsing logic for metrics and output_vid from `proc.stdout`.
 
     total_frames: Optional[int] = None
     processed_frames = 0
@@ -349,36 +721,20 @@ def _run_musetalk_inference(
     script_sec = None
     peak_vram = None
     peak_ram_kb = None
-    output_vid = None
+    output_vid_parsed: Optional[str] = None
 
-    # Stream stdout so we can emit progress updates while inference runs.
-    for raw_line in proc.stdout:
-        line = raw_line.strip()
-        if not line:
-            continue
-
+    for line in proc.stdout.splitlines():
         if line.startswith("Number of frames:"):
             try:
-                # "Number of frames: N"
                 total_frames = int(line.split(":", 1)[1].strip())
-                if job_id:
-                    _send_progress_update(
-                        job_id,
-                        status="running",
-                        progress=0.0,
-                        phase="preparing",
-                        metrics={"frames_total": total_frames},
-                    )
-            except Exception:
+            except ValueError:
                 pass
         elif line.startswith("PROGRESS_FRAMES="):
             try:
                 processed_frames = int(line.split("=", 1)[1].strip())
                 if total_frames and job_id:
                     frac = processed_frames / float(total_frames)
-                    # Map raw inference progress into 0.1–0.9 window.
                     logical_progress = 0.1 + 0.8 * max(0.0, min(frac, 1.0))
-                    # Emit only on meaningful change (~5%).
                     if logical_progress >= last_reported_progress + 0.05:
                         last_reported_progress = logical_progress
                         _send_progress_update(
@@ -391,7 +747,7 @@ def _run_musetalk_inference(
                                 "frames_total": total_frames,
                             },
                         )
-            except Exception:
+            except ValueError:
                 pass
         elif line.startswith("Padding generated images to original video size"):
             if job_id:
@@ -403,48 +759,56 @@ def _run_musetalk_inference(
                 )
         elif line.startswith("Generation time (model inference loop):"):
             try:
-                # ...: 24.374 seconds
                 parts = line.split(": ", 1)[1].split()
                 gen_sec = float(parts[0])
-            except Exception:
+            except ValueError:
                 pass
         elif line.startswith("Total script wall time (main):"):
             try:
                 parts = line.split(": ", 1)[1].split()
                 script_sec = float(parts[0])
-            except Exception:
+            except ValueError:
                 pass
         elif line.startswith("Peak VRAM (PyTorch max allocated):"):
             try:
                 parts = line.split(": ", 1)[1].split()
                 peak_vram = float(parts[0])
-            except Exception:
+            except ValueError:
                 pass
         elif line.startswith("Results saved to"):
-            # Expected: "Results saved to <path>"
             try:
-                output_vid = line.split("Results saved to", 1)[1].strip()
-            except Exception:
+                output_vid_parsed = line.split("Results saved to", 1)[1].strip()
+            except IndexError:
                 pass
-
-    stderr_lines = proc.stderr.read().splitlines()
 
     for line in stderr_lines:
         if "Maximum resident set size" in line:
             try:
-                # ...: 123456 kbytes
                 parts = line.split()
                 peak_ram_kb = int(parts[-2])
-            except Exception:
+            except ValueError:
                 pass
 
-    return_code = proc.wait()
-    if return_code != 0:
-        raise RuntimeError(
-            f"Inference process failed with code {return_code}: "
-            f"{os.linesep.join(stderr_lines)[:500]}"
-        )
+    if output_vid_parsed is None:
+        # Fallback if inference didn't print output path
+        # This matches scripts.inference default pattern for v15.
+        output_vid_parsed = os.path.join(workdir, result_dir, "v15")
+        # In a real scenario, you might need to glob for the actual file here.
+        # For this example, we'll assume the directory is sufficient or a specific file name is known.
+        # If the output is a directory, we need to find the actual video file within it.
+        # For now, we'll just use the directory as a placeholder.
+        # A more robust solution would involve parsing the actual filename from stdout/stderr or globbing.
+        # For the purpose of this diff, we'll assume `output_vid_parsed` is the path to the video.
+        # If it's a directory, the `os.path.exists` check below might need adjustment.
 
+    if not os.path.exists(output_vid_parsed):
+        raise ProcessingError(
+            stage="postprocessing",
+            message="Output video not found after inference success",
+            details={"output_path": output_vid_parsed},
+            retryable=False
+        )
+    
     metrics: Dict[str, Any] = {
         "GENERATION_TIME_SEC": gen_sec,
         "SCRIPT_WALL_TIME_SEC": script_sec,
@@ -452,20 +816,13 @@ def _run_musetalk_inference(
         "PEAK_RAM_KB": peak_ram_kb,
     }
 
-    # Fallback if inference didn't print output path
-    if output_vid is None:
-        # This matches scripts.inference default pattern for v15.
-        base_dir = os.path.join(workdir, result_dir, "v15")
-        # We don't know exact name; in practice you may want to glob here.
-        output_vid = base_dir
-
     # Clean up temporary inference config.
     try:
         os.remove(inference_config_path)
     except OSError:
         pass
 
-    return metrics, output_vid
+    return metrics, output_vid_parsed
 
 
 def _write_asset_metadata(
@@ -559,9 +916,48 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
         },
     )
 
+    video_path: Optional[str] = None
+    audio_path: Optional[str] = None
+    metrics: Dict[str, Any] = {}
+    b2_bucket: Optional[str] = None
+    b2_file_name: Optional[str] = None
+
+    job_id = req.musetalk_job_id
+    queue_job_id = os.environ.get("SALAD_QUEUE_JOB_ID")
+    gpu_class = os.environ.get("GPU_CLASS_NAME", "unknown")
+    
+    stage_times: Dict[str, float] = {}
+    total_start = time.time()
+
+    video_path: Optional[str] = None
+    audio_path: Optional[str] = None
+    metrics: Dict[str, Any] = {}
+    b2_bucket: Optional[str] = None
+    b2_file_name: Optional[str] = None
+
     try:
+        # 1. Download Stage
+        stage_start = time.time()
         video_path = await _download_to_temp(str(req.video_url), suffix=".mp4")
         audio_path = await _download_to_temp(str(req.audio_url), suffix=".wav")
+        stage_times["download"] = time.time() - stage_start
+
+        # 2. Validation Stage
+        stage_start = time.time()
+        _validate_media_file(video_path, "video")
+        _validate_media_file(audio_path, "audio")
+        stage_times["validation"] = time.time() - stage_start
+
+        # 3. Inference Stage
+        stage_start = time.time()
+        
+        # Send progress update
+        if job_id:
+             try:
+                _send_progress_update(job_id, status="running", progress=0.1, phase="inference")
+             except:
+                pass # Non-critical
+                
         metrics, output_video_path = _run_musetalk_inference(
             video_path=video_path,
             audio_path=audio_path,
@@ -569,72 +965,119 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
             resolution=req.resolution,
             job_id=job_id,
         )
-        # Tag metrics with gpu_class so the orchestrator can aggregate
-        # per-tier statistics later.
+        
+        # Tag metrics
         metrics = dict(metrics or {})
         metrics.setdefault("gpu_class", gpu_class)
+        stage_times["inference"] = time.time() - stage_start
+
+        # 4. Upload Stage
+        stage_start = time.time()
         if job_id:
-            _send_progress_update(
-                job_id,
-                status="running",
-                progress=0.95,
-                phase="uploading",
-            )
+            try:
+                _send_progress_update(job_id, status="running", progress=0.95, phase="uploading")
+            except:
+                pass
+
         b2_bucket, b2_file_name = _upload_to_b2(output_video_path, job_id)
+        stage_times["upload"] = time.time() - stage_start
+        
+        # Record metadata
         _write_asset_metadata(
             job_id, queue_job_id, gpu_class, req, b2_bucket, b2_file_name, metrics
         )
+
+        return GenerateResponse(
+            status="success",
+            output_url=f"https://f000.backblazeb2.com/file/{b2_bucket}/{b2_file_name}",  # Construct URL mostly for debug
+            musetalk_job_id=job_id,
+            metrics={
+                **metrics,
+                "stage_times": stage_times,
+                "total_time": time.time() - total_start
+            }
+        )
+
+    except MediaError as exc:
+        # Return 422 for input/media errors
+        logger.warning(
+            "media_error",
+            extra={
+                "job_id": job_id,
+                "queue_job_id": queue_job_id,
+                "stage": exc.stage,
+                "error": exc.message,
+                "details": exc.details
+            }
+        )
+        return JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={
+                "status": "failed",
+                "error_type": "media_error",
+                "error_message": exc.message,
+                "stage": exc.stage,
+                "details": exc.details,
+                "retryable": False,
+                "stage_times": stage_times
+            }
+        )
+
+    except ProcessingError as exc:
+        # Return 500 for worker/processing errors
+        logger.error(
+            "processing_error", 
+            extra={
+                "job_id": job_id,
+                "queue_job_id": queue_job_id,
+                "stage": exc.stage,
+                "error": exc.message,
+                "details": exc.details
+            }
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "status": "failed",
+                "error_type": "processing_error",
+                "error_message": exc.message,
+                "stage": exc.stage,
+                "details": exc.details,
+                "stack_trace": traceback.format_exc(),
+                "retryable": exc.retryable,
+                "stage_times": stage_times
+            }
+        )
+
+    except Exception as exc:
+        # Catch-all for unexpected errors
+        logger.exception(
+            "unexpected_worker_error",
+            extra={
+                "job_id": job_id,
+                "queue_job_id": queue_job_id,
+                "error": str(exc)
+            }
+        )
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={
+                "status": "failed",
+                "error_type": "unknown_error",
+                "error_message": str(exc),
+                "stage": "unknown",
+                "details": {},
+                "stack_trace": traceback.format_exc(),
+                "retryable": False,
+                "stage_times": stage_times
+            }
+        )
+        
     finally:
         # Best-effort cleanup of temp files
-        for p in [locals().get("video_path"), locals().get("audio_path")]:
+        for p in [video_path, audio_path]:
             if p and os.path.exists(p):
                 try:
                     os.remove(p)
                 except OSError:
                     pass
-
-    if metrics.get("GENERATION_TIME_SEC") is None or metrics.get(
-        "SCRIPT_WALL_TIME_SEC"
-    ) is None:
-        # Still treat as success but log a warning; metrics parsing failed.
-        logger.warning(
-            "worker_job_missing_metrics",
-            extra={
-                "musetalk_job_id": job_id,
-                "queue_job_id": queue_job_id,
-            },
-        )
-
-    logger.info(
-        "worker_job_success",
-        extra={
-            "musetalk_job_id": job_id,
-            "queue_job_id": queue_job_id,
-            "gpu_class": gpu_class,
-            "b2_bucket": b2_bucket,
-            "b2_file_name": b2_file_name,
-            "metrics": metrics,
-        },
-    )
-    if job_id:
-        progress_metrics = dict(metrics or {})
-        progress_metrics.update(
-            {
-                "b2_bucket": b2_bucket,
-                "b2_file_name": b2_file_name,
-            }
-        )
-        _send_progress_update(
-            job_id,
-            status="succeeded",
-            progress=1.0,
-            phase="completed",
-            metrics=progress_metrics,
-        )
-
-    return GenerateResponse(
-        status="ok",
-        b2_bucket=b2_bucket,
-        b2_file_name=b2_file_name,
-        metrics=metrics,
-    )

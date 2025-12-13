@@ -1,0 +1,74 @@
+# Start from NVIDIA PyTorch base (optimizes CUDA setup)
+# Using PyTorch 2.5 base, we will upgrade to Nightly for RTX 5090 support
+FROM nvcr.io/nvidia/pytorch:24.10-py3
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    git \
+    time \
+    curl \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# 1. Install PyTorch Nightly (Required for Blackwell / RTX 5090)
+# Removes existing compatible torch first to avoid conflicts
+RUN pip uninstall -y torch torchvision torchaudio && \
+    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+
+# 2. Install Python Dependencies
+# Critical: numpy<2.0 to avoid conflicts
+RUN pip install "numpy<2.0" \
+    diffusers \
+    transformers \
+    accelerate \
+    safetensors \
+    einops \
+    sentencepiece \
+    huggingface_hub \
+    imageio \
+    imageio-ffmpeg \
+    opencv-python \
+    ftfy \
+    fastapi \
+    uvicorn \
+    requests \
+    b2sdk \
+    python-multipart
+
+# 3. Install FastVideo (Clone & Install)
+WORKDIR /workspace
+RUN git clone https://github.com/hao-ai-lab/FastVideo.git && \
+    cd FastVideo && \
+    pip install -e .
+
+# 4. Apply 720p Resolution Patch
+# Patches input_validation.py to allow 720p output
+RUN sed -i 's/max_area = 480 \* 832/max_area = 720 \* 1280/' /workspace/FastVideo/fastvideo/pipelines/stages/input_validation.py
+
+# 5. Install Salad HTTP Job Queue Worker
+RUN set -e; \
+    curl -fL \
+      https://github.com/SaladTechnologies/salad-cloud-job-queue-worker/releases/download/v0.5.0/salad-http-job-queue-worker_x86_64.tar.gz \
+      -o /tmp/salad-http-job-queue-worker_x86_64.tar.gz; \
+    echo 'd6d4485bc63d65e4c1322a49a7f94f6acb84b663bd7c0f80baa5be2095266585  /tmp/salad-http-job-queue-worker_x86_64.tar.gz' > /tmp/worker.sha256; \
+    sha256sum -c /tmp/worker.sha256; \
+    tar -xzf /tmp/salad-http-job-queue-worker_x86_64.tar.gz -C /usr/local/bin; \
+    rm /tmp/salad-http-job-queue-worker_x86_64.tar.gz /tmp/worker.sha256; \
+    chmod +x /usr/local/bin/salad-http-job-queue-worker
+
+# 6. Copy our worker application
+COPY worker_app_fastwan /workspace/worker_app_fastwan
+
+# 7. Create entrypoint script
+COPY run_fastwan_worker.sh /workspace/run_fastwan_worker.sh
+RUN chmod +x /workspace/run_fastwan_worker.sh
+
+WORKDIR /workspace
+
+# Default command
+CMD ["/workspace/run_fastwan_worker.sh"]
