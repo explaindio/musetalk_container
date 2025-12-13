@@ -15,10 +15,12 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
+ENV TORCH_CUDA_ARCH_LIST="9.0;10.0;12.0"
+
 # 1. Install PyTorch Nightly (Required for Blackwell / RTX 5090)
-# Removes existing compatible torch first to avoid conflicts
+# Force upgrade to ensure we get the absolute latest nightly with sm_120
 RUN pip uninstall -y torch torchvision torchaudio && \
-    pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+    pip install --pre --upgrade --force-reinstall --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # 2. Install Python Dependencies
 # Critical: numpy<2.0 to avoid conflicts
