@@ -65,5 +65,5 @@ The orchestrator should push a job to the `fastwan-queue` with this body:
 ## 5. Progress & Results
 
 The worker will call back to:
-- `POST /internal/jobs/<job_id>/progress` with `status="running"`, `progress=0.x`.
-- `POST /internal/jobs/<job_id>/progress` with `status="succeeded"`, `metrics={...}`, `output_url="..."` upon completion.
+- `POST /internal/videogen/jobs/<job_id>/progress` with `status="running"`, `progress=0.x`.
+- `POST /internal/videogen/jobs/<job_id>/progress` with `status="succeeded"`, `metrics={...}`, `output_url="..."` upon completion.
