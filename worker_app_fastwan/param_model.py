@@ -5,7 +5,7 @@ class GenerateRequest(BaseModel):
     musetalk_job_id: str  # Kept naming for consistency with orchestrator, or generic 'job_id'
     image_url: HttpUrl
     prompt: str
-    num_frames: int = 81
+    num_frames: int = 121
     width: int = 480
     height: int = 832
     steps: int = 4

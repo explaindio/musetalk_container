@@ -73,7 +73,7 @@ def send_progress_update(job_id: str, status: str = None, progress: float = None
     if not base_url or not internal_key:
         return
 
-    url = f"{base_url.rstrip('/')}/internal/jobs/{job_id}/progress"
+    url = f"{base_url.rstrip('/')}/internal/videogen/jobs/{job_id}/progress"
     payload = {}
     if status: payload["status"] = status
     if progress: payload["progress"] = progress

@@ -54,7 +54,7 @@ The orchestrator should push a job to the `fastwan-queue` with this body:
   "musetalk_job_id": "<job_uuid>",
   "image_url": "https://...",
   "prompt": "She speaks with calm composed energy...",
-  "num_frames": 81,
+  "num_frames": 121, // 121 frames @ 24fps ≈ 5.0 seconds
   "width": 720,
   "height": 1280,
   "steps": 4,
