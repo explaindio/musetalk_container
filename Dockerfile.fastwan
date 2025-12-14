@@ -24,10 +24,10 @@ RUN apt-get update && apt-get install -y \
 # Create virtual environment
 RUN python3.10 -m venv /opt/venv
 
-# 1. Install PyTorch Nightly (Required for Blackwell / RTX 5090 sm_120)
-RUN pip install --no-cache-dir --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+# 1. Install PyTorch 2.7.1 (has sm_120 / Blackwell / RTX 5090 support)
+RUN pip install --no-cache-dir torch==2.7.1 torchvision --index-url https://download.pytorch.org/whl/cu128
 
-# Verify PyTorch is the nightly version (should show 2.6+ or dev version)
+# Verify PyTorch version and CUDA
 RUN python -c "import torch; print(f'PyTorch version: {torch.__version__}'); print(f'CUDA available: {torch.cuda.is_available()}')"
 
 # 2. Install Python Dependencies
