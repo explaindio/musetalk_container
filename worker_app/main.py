@@ -139,9 +139,18 @@ async def _buffer_worker_loop() -> None:
       - Claims buffer jobs and runs them via the local /generate endpoint.
     """
 
+    # Support both BUFFER_WORKER_ID (legacy) and WORKER_MODE=buffer (new)
     worker_id = os.environ.get("BUFFER_WORKER_ID")
-    if not worker_id:
+    worker_mode = os.environ.get("WORKER_MODE", "queue").lower()
+    
+    # If neither is set for buffer mode, exit
+    if not worker_id and worker_mode != "buffer":
         return
+    
+    # Generate worker_id if only WORKER_MODE=buffer is set
+    if not worker_id and worker_mode == "buffer":
+        import socket
+        worker_id = f"buffer-{socket.gethostname()}"
 
     base_url = os.environ.get("BUFFER_ORCHESTRATOR_BASE_URL") or os.environ.get(
         "ORCHESTRATOR_BASE_URL"
@@ -154,7 +163,8 @@ async def _buffer_worker_loop() -> None:
         )
         return
 
-    gpu_class = os.environ.get("GPU_CLASS_NAME")
+    # Support both GPU_CLASS (new) and GPU_CLASS_NAME (legacy)
+    gpu_class = os.environ.get("GPU_CLASS") or os.environ.get("GPU_CLASS_NAME", "Unknown GPU")
     capacity = int(os.environ.get("BUFFER_CAPACITY", "1"))
     interval_sec = int(os.environ.get("BUFFER_POLL_INTERVAL_SEC", "10"))
 
@@ -884,8 +894,11 @@ async def _start_buffer_worker_loop() -> None:
     workers are unaffected.
     """
 
+    # Support both BUFFER_WORKER_ID (legacy) and WORKER_MODE=buffer (new)
     worker_id = os.environ.get("BUFFER_WORKER_ID")
-    if worker_id:
+    worker_mode = os.environ.get("WORKER_MODE", "queue").lower()
+    
+    if worker_id or worker_mode == "buffer":
         logger.info(
             "buffer_worker_loop_starting",
             extra={"BUFFER_WORKER_ID": worker_id},

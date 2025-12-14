@@ -1,7 +1,9 @@
 # MuseTalk Worker Documentation
 
 ## Overview
-This worker runs the **MuseTalk** model (Avatar Talking Head generation). It is capable of acting as both a **Salad Cloud Worker** (ephemeral) and a **Local Buffer Worker** (persistent GPU).
+This worker runs the **MuseTalk** model (Avatar Talking Head generation). It supports:
+- **Queue Mode (Salad):** Ephemeral cloud workers
+- **Buffer Mode (Vast.ai/Local):** Persistent workers polling orchestrator
 
 ## Architecture
 
@@ -15,28 +17,85 @@ This worker runs the **MuseTalk** model (Avatar Talking Head generation). It is 
 - **Base:** `nvidia/cuda:11.8.0-runtime-ubuntu22.04`
 - **Python:** 3.10 (via venv)
 
-### 3. Key Components
-- **Salad Worker Binary:** `/usr/local/bin/salad-http-job-queue-worker`
-  - Runs in background, polls Salad Queue (or Mock queue).
-  - Forwards jobs to `localhost:8000/generate`.
-- **FastAPI App (`worker_app.main:app`):**
-  - Listens on port 8000.
-  - Endpoint: `POST /generate`
-  - Logic: Downloads -> MuseTalk Inference -> Uploads to B2.
-- **Buffer Logic:**
-  - If `BUFFER_WORKER_ID` is set, runs a background loop (`_buffer_worker_loop`) to poll orchestrator for "buffer" jobs directly, bypassing Salad Queue.
+### 3. Worker Modes
 
-### 4. API & Integration
-- **Orchestrator Endpoint Scope:** `/internal/jobs/...`
-- **Progress Reporting:**
-  - `POST {ORCHESTRATOR_BASE_URL}/internal/jobs/{id}/progress`
-  - Payload: `{ "status": "running", "progress": 0.5 }`
+#### Queue Mode (Default - Salad)
+Leave `WORKER_MODE` unset or set to `queue`. Don't set `BUFFER_WORKER_ID`.
 
-### 5. Running Locally (Buffer Mode)
-See `.agent/workflows/setup-buffer-worker.md` for setup.
-Currently running on this machine as `buffer-orch-local-1` (Paused/Running).
+| Component | Description |
+|-----------|-------------|
+| Salad Binary | Polls Salad queue, forwards to localhost:8000 |
+| FastAPI | Listens on :8000, handles `/generate` requests |
+| Progress | Reports to `/internal/jobs/{id}/progress` |
 
-### 6. Deployment to Salad
-1.  Build: `docker build -f Dockerfile.worker -t explaindio/musetalk-queue-worker:progress .`
-2.  Push: `docker push explaindio/musetalk-queue-worker:progress`
-3.  Configure Salad Queue to pull this image.
+#### Buffer Mode (Vast.ai / Local)
+Set `WORKER_MODE=buffer` OR set `BUFFER_WORKER_ID`.
+
+| Component | Description |
+|-----------|-------------|
+| FastAPI | Runs on :8000 |
+| Background Task | Heartbeat + job claim loop |
+| Job Claim | `POST /internal/buffer/jobs/claim` |
+| Heartbeat | `POST /internal/buffer/workers/{id}/heartbeat` every 10s |
+| Completion | `POST /internal/buffer/jobs/{id}/status` |
+
+### 4. Environment Variables
+
+#### Common (Both Modes)
+```bash
+ORCHESTRATOR_BASE_URL=https://api.avatargen.online
+INTERNAL_API_KEY=<key>
+B2_KEY_ID=<key>
+B2_APP_KEY=<key>
+B2_BUCKET_NAME=talking-avatar
+```
+
+#### Buffer Mode
+```bash
+# Option 1: New pattern (Vast.ai)
+WORKER_MODE=buffer
+GPU_CLASS=RTX 3080
+
+# Option 2: Legacy pattern (Local buffers)
+BUFFER_WORKER_ID=buffer-local-1
+GPU_CLASS_NAME=RTX 3090 (24 GB)
+
+# Both GPU_CLASS and GPU_CLASS_NAME are supported
+```
+
+### 5. API Endpoints
+- `GET /hc` - Health check
+- `POST /generate` - Generate talking head video
+
+### 6. Deployment
+
+#### Salad (Queue Mode)
+1. Build: `docker build -f Dockerfile.worker -t explaindio/musetalk-queue-worker:progress .`
+2. Push: `docker push explaindio/musetalk-queue-worker:progress`
+3. Configure Salad to pull this image
+
+#### Vast.ai (Buffer Mode)
+```bash
+docker run --gpus all \
+  -e WORKER_MODE=buffer \
+  -e GPU_CLASS="RTX 3080" \
+  -e ORCHESTRATOR_BASE_URL=https://api.avatargen.online \
+  -e INTERNAL_API_KEY=<key> \
+  -e B2_KEY_ID=<key> \
+  -e B2_APP_KEY=<key> \
+  -e B2_BUCKET_NAME=talking-avatar \
+  explaindio/musetalk-queue-worker:progress
+```
+
+#### Local Buffer (Legacy)
+```bash
+docker run --gpus all \
+  -e BUFFER_WORKER_ID=buffer-local-1 \
+  -e GPU_CLASS_NAME="RTX 3090 (24 GB)" \
+  -e ORCHESTRATOR_BASE_URL=https://api.avatargen.online \
+  -e INTERNAL_API_KEY=<key> \
+  -e B2_KEY_ID=<key> \
+  -e B2_APP_KEY=<key> \
+  -e B2_BUCKET_NAME=talking-avatar \
+  explaindio/musetalk-queue-worker:progress
+```
