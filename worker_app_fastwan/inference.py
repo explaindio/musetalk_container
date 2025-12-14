@@ -1,8 +1,23 @@
 import os
+import sys
 import torch
 import logging
 import time
+import multiprocessing
 from typing import Optional, Dict, Any
+
+# CRITICAL: Set multiprocessing start method before importing fastvideo
+# This fixes "WorkerMultiprocProc failed to start" in container environments
+if __name__ != "__main__":
+    try:
+        multiprocessing.set_start_method('spawn', force=True)
+    except RuntimeError:
+        pass  # Already set
+
+# Set environment variables before imports
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"  # Force single GPU
+
 from fastvideo import VideoGenerator
 
 logger = logging.getLogger(__name__)
@@ -18,10 +33,15 @@ class FastWanInference:
             return
 
         logger.info(f"Loading FastWan model from {self.model_id}...")
+        logger.info(f"PyTorch version: {torch.__version__}")
+        logger.info(f"CUDA available: {torch.cuda.is_available()}")
+        if torch.cuda.is_available():
+            logger.info(f"CUDA device: {torch.cuda.get_device_name(0)}")
+            logger.info(f"CUDA capability: {torch.cuda.get_device_capability(0)}")
+        
         start = time.time()
         
-        # Initialize Generator
-        # num_gpus=1 for now.
+        # Initialize Generator with explicit single GPU
         self.generator = VideoGenerator.from_pretrained(
             self.model_id,
             num_gpus=1,
@@ -46,9 +66,6 @@ class FastWanInference:
             self.load_model()
             
         logger.info(f"Starting generation: {width}x{height} @ {num_frames} frames")
-        
-        # Set allocator to avoid fragmentation (important for 5090/Blackwell)
-        os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
         
         start_time = time.time()
         
