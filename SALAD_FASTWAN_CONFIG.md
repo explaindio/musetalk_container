@@ -1,12 +1,24 @@
 # FastWan Worker - Salad Cloud Configuration
 
-## CRITICAL: Shared Memory Requirements
+## CRITICAL: Docker Runtime Requirements
 
-FastVideo uses Python multiprocessing which requires **large shared memory**.
+FastVideo uses a **multiprocessing spawn executor** that requires specific Docker flags.
 
-### Required Salad Container Settings
+### Required Docker Flags
 
-In your Salad container configuration, you MUST set shared memory:
+```bash
+docker run --gpus all --ipc=host --shm-size=8g explaindio/fastwan-worker:v1
+```
+
+| Flag | Why It's Needed | Default |
+|------|-----------------|---------|
+| `--gpus all` | GPU access | N/A |
+| `--ipc=host` | **CRITICAL** - Allows multiprocessing spawn between processes | Isolated |
+| `--shm-size=8g` | Increases /dev/shm from 64MB to 8GB | 64MB |
+
+### Salad Container Configuration
+
+In your Salad container configuration, you **MUST** set:
 
 ```json
 {
@@ -14,72 +26,100 @@ In your Salad container configuration, you MUST set shared memory:
     "image": "explaindio/fastwan-worker:v1",
     "resources": {
       "gpu_classes": ["rtx_5090"],
-      "memory": 32768,
-      "shm_size": 8589934592
-    }
+      "memory": 32768
+    },
+    "ipc_mode": "host",
+    "shm_size": 8589934592
   }
 }
 ```
 
-Or in Docker equivalent:
-```bash
-docker run --gpus all --shm-size=8g explaindio/fastwan-worker:v1
+Or in Salad dashboard:
+- **IPC Mode**: Host
+- **Shared Memory**: 8589934592 (8GB in bytes)
+
+### The Problem Without These Settings
+
+Without `--ipc=host`, FastVideo's multiprocessing executor fails with:
+
+```
+Exception: WorkerMultiprocProc initialization failed due to an exception in a background process.
 ```
 
-### Why This Matters
+This is NOT a code bug - it's a Docker container configuration issue.
 
-- **Docker default**: `/dev/shm` is only 64MB
-- **FastVideo needs**: At least 8GB shared memory
-- **Symptom of failure**: `WorkerMultiprocProc failed to start`
+### Verification Test
 
-### Verification
+After starting the container, logs should show:
 
-The container will output at startup:
+**✅ Success:**
 ```
-Shared Memory (/dev/shm): 8.0G
-Testing multiprocessing spawn...
+=== FastWan Worker Starting ===
+PyTorch: 2.6.0.dev...+cu128
+CUDA available: True
+GPU: NVIDIA GeForce RTX 5090
 Multiprocessing OK: [2, 4, 6]
+===============================
 ```
 
-If you see:
+**❌ Failure (missing --ipc=host or --shm-size):**
 ```
-WARNING: /dev/shm is too small! FastVideo needs --shm-size=8g
-Multiprocessing FAILED: ...
-```
-
-Then shared memory is not configured correctly.
-
-## Salad Dashboard Configuration
-
-1. Go to Container Group settings
-2. Find "Advanced" or "Container Resources" section
-3. Look for "Shared Memory" or "shm_size"
-4. Set to: `8589934592` (8GB in bytes) or `8g`
-
-## Alternative: IPC Host Mode
-
-If Salad supports it:
-```json
-{
-  "container": {
-    "ipc_mode": "host"
-  }
-}
+WorkerMultiprocProc initialization failed
 ```
 
-This shares the host's IPC namespace (including shared memory) with the container.
+---
+
+## If Salad Doesn't Support --ipc=host
+
+If Salad Cloud does not support IPC host mode, here are alternatives:
+
+### Option 1: Ray Executor
+
+Modify the worker to use Ray instead of multiprocessing:
+
+```python
+generator = VideoGenerator.from_pretrained(
+    'FastVideo/FastWan2.2-TI2V-5B-Diffusers',
+    num_gpus=1,
+    distributed_executor_backend="ray",  # Use Ray instead of mp
+)
+```
+
+And add `pip install ray` to the Dockerfile.
+
+### Option 2: Diffusers Directly
+
+Use the diffusers library directly without FastVideo's multiprocessing wrapper. Slower but guaranteed to work.
+
+---
 
 ## RTX 5090 Requirements
 
-- **CUDA**: 12.8+ (for sm_120 / Blackwell support)
-- **PyTorch**: Nightly build with cu128
-- **VRAM**: 32GB (5090 has 32GB)
-- **SHM**: 8GB minimum
+| Setting | Value |
+|---------|-------|
+| GPU | RTX 5090 (Blackwell, sm_120) |
+| CUDA | 12.8+ |
+| PyTorch | Nightly with cu128 (has sm_120 kernels) |
+| VRAM | 32GB |
+| Shared Memory | 8GB minimum |
+| IPC Mode | Host (required for multiprocessing) |
+
+---
 
 ## Environment Variables
 
-| Variable | Value | Purpose |
-|----------|-------|---------|
-| `WORKER_MODE` | `queue` or `buffer` | Job source |
-| `CUDA_VISIBLE_DEVICES` | `0` (default) | GPU selection |
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `WORKER_MODE` | `queue` | `queue` for Salad, `buffer` for Vast.ai |
+| `CUDA_VISIBLE_DEVICES` | `0` | GPU selection |
 | `PYTORCH_CUDA_ALLOC_CONF` | `expandable_segments:True` | Memory allocation |
+
+---
+
+## Tested Working Configuration
+
+Tested on: **December 15, 2025**
+Platform: **Vast.ai RTX 5090**
+Result: **SUCCESS - multiprocessing executor works**
+
+The Docker configuration in this repository replicates the exact working environment.
