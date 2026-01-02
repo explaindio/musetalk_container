@@ -1,0 +1,20 @@
+Loads checkpoint by local backend from path: ./models/dwpose/dw-ll_ucoco_384.pth
+cuda start
+load unet model from models/musetalkV15/unet.pth
+Loaded inference config: {'task_0': {'video_path': '/home/a/musetalk/girl_foravatar_talking.mp4', 'audio_path': '/home/a/musetalk/MuseTalk/Voiceover_SH_AIHacks_Oct15_V2.mp3'}}
+Extracting landmarks... time-consuming operation
+reading images...
+get key_landmark and face bounding boxes with the default value
+********************************************bbox_shift parameter adjustment**********************************************************
+Total frame:「121」 Manually adjust range : [ -15~14 ] , the current value: 0
+*************************************************************************************************************************************
+Number of frames: 121
+Starting inference
+Padding generated images to original video size
+Generation time (model inference loop): 60.943 seconds
+Video generation command: ffmpeg -y -v warning -r 16.0 -f image2 -i results/prep_coords/v15/girl_foravatar_talking_Voiceover_SH_AIHacks_Oct15_V2/%08d.png -vcodec libx264 -vf format=yuv420p -crf 18 results/prep_coords/v15/temp_girl_foravatar_talking_Voiceover_SH_AIHacks_Oct15_V2.mp4
+Audio combination command: ffmpeg -y -v warning -i /home/a/musetalk/MuseTalk/Voiceover_SH_AIHacks_Oct15_V2.mp3 -i results/prep_coords/v15/temp_girl_foravatar_talking_Voiceover_SH_AIHacks_Oct15_V2.mp4 results/prep_coords/v15/prep_dummy.mp4
+Results saved to results/prep_coords/v15/prep_dummy.mp4
+Peak VRAM (PyTorch max allocated): 7064.74 MiB
+Total script wall time (main): 369.072 seconds
+

@@ -3,15 +3,14 @@
 # ==============================================================================
 # Provider-agnostic worker that works on: Salad, OctaSpace, Vast.ai, TensorDock, Runpod
 # See UNIFIED_WORKER_SPEC.md for full specification.
+#
+# Build Arguments:
+# BASE_IMAGE: Defaults to 'explaindio/musetalk-queue-worker:progress' (Docker Hub)
+#             Set to 'musetalk-base:local' if building from local Dockerfile.base in 2 steps.
 # ==============================================================================
 
-FROM explaindio/musetalk-queue-worker:progress AS base
-
-# The base image already has:
-# - CUDA, PyTorch, MuseTalk inference code
-# - uvicorn, httpx, FastAPI
-# - /app/worker_app/main.py with /generate endpoint
-# - Models and dependencies
+ARG BASE_IMAGE=explaindio/musetalk-queue-worker:progress
+FROM ${BASE_IMAGE} AS base
 
 # Install requests (used by unified_worker.py if needed)
 RUN pip install --no-cache-dir requests

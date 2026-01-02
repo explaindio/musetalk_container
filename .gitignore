@@ -6,9 +6,27 @@
 *.yml
 *.mp4
 *.wav
+*.mp3
 *.pyc
 __pycache__/
 *.pid
-MuseTalk/
+
+# Archived
 archived-old-orchestratory/
 salad_management_archive/
+
+# Large Model Files & Results
+*.pth
+*.pt
+*.bin
+*.onnx
+*.safetensors
+MuseTalk/models/
+MuseTalk/results/
+MuseTalk/data/
+models/
+results/
+checkpoints/
+
+# Keep source code
+!MuseTalk/

@@ -1,0 +1,47 @@
+# ==============================================================================
+# MuseTalk Base Image (Self-Contained)
+# ==============================================================================
+# Builds the environment, installs dependencies, and downloads models.
+# This replaces dependency on 'explaindio/musetalk-queue-worker:progress'
+# ==============================================================================
+
+FROM nvidia/cuda:12.1.0-runtime-ubuntu22.04
+
+# 1. System Dependencies
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y \
+    python3.10 \
+    python3-pip \
+    python3-dev \
+    git \
+    ffmpeg \
+    wget \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Link python3 to python
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+WORKDIR /app
+
+# 2. Install Python Dependencies
+# Copy requirements first for cache efficiency
+COPY MuseTalk/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt
+
+# 3. Copy MuseTalk Source Code
+# NOTE: We copy the contents of MuseTalk/ into /app/
+# (So /app/musetalk/ package exists)
+COPY MuseTalk/ /app/
+
+# 4. Download Weights
+# This step makes the image large but self-contained.
+# Ensure download_weights.sh is executable
+RUN chmod +x /app/download_weights.sh && /app/download_weights.sh
+
+# 5. Copy Worker App (FastAPI wrapper)
+# Existing main.py expects to be in /app/worker_app/
+COPY worker_app /app/worker_app/
+
+# Env vars for python path
+ENV PYTHONPATH=/app
