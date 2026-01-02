@@ -35,8 +35,8 @@ RUN apt-get update && apt-get install -y \
 RUN pip install --upgrade pip
 
 # Install PyTorch with CUDA 12.8 and sm_120 (Blackwell) support
-# This is the CRITICAL step - must have sm_120 in arch list
-RUN pip install --pre torch torchvision --index-url https://download.pytorch.org/whl/nightly/cu128 --force-reinstall
+# Matches verified configuration on Vast.ai
+RUN pip install torch==2.7.1 torchvision --index-url https://download.pytorch.org/whl/cu128 --force-reinstall
 
 # Check PyTorch version and arch list  
 RUN python3 -c "import torch; print(f'PyTorch: {torch.__version__}'); print(f'Arch list: {torch.cuda.get_arch_list()}')"
@@ -100,5 +100,5 @@ RUN python3 -c "import torch; print(f'PyTorch: {torch.__version__}'); \
     print(f'CUDA available: {torch.cuda.is_available()}'); \
     print(f'Arch list: {torch.cuda.get_arch_list() if hasattr(torch.cuda, \"get_arch_list\") else \"N/A\"}')"
 
-# Default command
-CMD ["/workspace/run_fastwan_worker.sh"]
+# Default command - explicit bash execution to avoid permission/shebang issues
+CMD ["/bin/bash", "/workspace/run_fastwan_worker.sh"]

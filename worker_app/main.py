@@ -11,6 +11,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime, timezone
+import socket
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
@@ -19,6 +20,25 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, HttpUrl
 
 logger = logging.getLogger(__name__)
+
+def get_worker_id() -> str:
+    """
+    Resolve the worker identity, prioritizing Salad Machine ID.
+    """
+    # 1. Try Salad Machine ID (Unique to the physical node)
+    salad_id = os.environ.get("SALAD_MACHINE_ID")
+    if salad_id:
+        return salad_id
+    
+    # 2. Try configured ID (e.g. for buffer workers)
+    env_id = os.environ.get("WORKER_ID")
+    if env_id:
+        return env_id
+        
+    # 3. Fallback to container hostname
+    return socket.gethostname()
+
+CURRENT_WORKER_ID = get_worker_id()
 
 app = FastAPI(title="MuseTalk Worker", description="MuseTalk job processor for Salad Job Queues.")
 
@@ -117,6 +137,8 @@ def _send_progress_update(
         payload["metrics"] = metrics
     if error is not None:
         payload["error"] = error
+    
+    payload["worker_id"] = CURRENT_WORKER_ID
 
     headers = {"X-Internal-API-Key": internal_key}
 
@@ -170,7 +192,7 @@ async def _buffer_worker_loop() -> None:
 
     headers = {"X-Internal-API-Key": internal_key}
 
-    async with httpx.AsyncClient(timeout=10.0) as client:
+    async with httpx.AsyncClient(timeout=30.0) as client:
         status = "idle"
         last_error: Optional[str] = None
         while True:
@@ -241,7 +263,8 @@ async def _buffer_worker_loop() -> None:
                         # Always attempt to report final status, but do not
                         # treat reporting failures themselves as job failures.
                         try:
-                            await client.post(
+                            print(f"[buffer_worker] Sending status update for {buffer_job_id}: {'succeeded' if job_ok else 'failed'}", flush=True)
+                            status_resp = await client.post(
                                 f"{base_url.rstrip('/')}/internal/buffer/jobs/{buffer_job_id}/status",
                                 json={
                                     "status": "succeeded" if job_ok else "failed",
@@ -249,7 +272,9 @@ async def _buffer_worker_loop() -> None:
                                 },
                                 headers=headers,
                             )
+                            print(f"[buffer_worker] Status update response: {status_resp.status_code}", flush=True)
                         except Exception as report_exc:  # pragma: no cover - defensive
+                            print(f"[buffer_worker] Status update FAILED: {report_exc}", flush=True)
                             logger.warning(
                                 "buffer_job_status_update_failed",
                                 extra={
@@ -262,9 +287,11 @@ async def _buffer_worker_loop() -> None:
                             status = "idle"
             except Exception as exc:  # pragma: no cover - defensive
                 last_error = repr(exc)
+                tb = traceback.format_exc()
+                print(f"[buffer_worker_loop_error] {last_error}\n{tb}", flush=True)
                 logger.warning(
                     "buffer_worker_loop_error",
-                    extra={"worker_id": worker_id, "error": last_error},
+                    extra={"worker_id": worker_id, "error": last_error, "traceback": tb},
                 )
 
             await asyncio.sleep(interval_sec)
@@ -929,6 +956,17 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
         },
     )
 
+    # 0. Startup Model Check (Fail fast if something is wrong)
+    # This is a lightweight check to ensure critical dependencies are importable.
+    # In a real scenario, we might want to load the model on startup, 
+    # but the current architecture runs inference in a subprocess, so we just check imports.
+    try:
+        import torch
+        if not torch.cuda.is_available():
+             logger.error("startup_check_failed: CUDA not available")
+    except ImportError:
+         logger.error("startup_check_failed: torch import failed")
+
     video_path: Optional[str] = None
     audio_path: Optional[str] = None
     metrics: Dict[str, Any] = {}
@@ -1064,12 +1102,13 @@ async def generate(req: GenerateRequest) -> GenerateResponse:
 
     except Exception as exc:
         # Catch-all for unexpected errors
-        logger.exception(
+        logger.error(
             "unexpected_worker_error",
             extra={
                 "job_id": job_id,
                 "queue_job_id": queue_job_id,
-                "error": str(exc)
+                "error": str(exc),
+                "traceback": traceback.format_exc()
             }
         )
         return JSONResponse(

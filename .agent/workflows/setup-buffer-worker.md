@@ -4,12 +4,12 @@ description: Set up a buffer GPU worker for the VPS orchestrator
 
 # Buffer GPU Worker Setup
 
-This workflow sets up a MuseTalk buffer GPU worker that connects to the VPS orchestrator at `https://api.avatargen.online`.
+This workflow sets up a MuseTalk buffer GPU worker that connects to the VPS orchestrator at `https://orch.avatargen.online`.
 
 ## Prerequisites
 - Ubuntu/Debian with NVIDIA GPU
 - Docker with GPU support (`nvidia-container-toolkit`)
-- Network access to `https://api.avatargen.online`
+- Network access to `https://orch.avatargen.online`
 
 ---
 
@@ -73,8 +73,8 @@ ExecStart=/usr/bin/docker run --gpus all --rm --network host \
   --env-file .env \
   --name WORKER_ID_PLACEHOLDER \
   -e BUFFER_WORKER_ID=WORKER_ID_PLACEHOLDER \
-  -e BUFFER_ORCHESTRATOR_BASE_URL=https://api.avatargen.online \
-  -e ORCHESTRATOR_BASE_URL=https://api.avatargen.online \
+  -e BUFFER_ORCHESTRATOR_BASE_URL=https://orch.avatargen.online \
+  -e ORCHESTRATOR_BASE_URL=https://orch.avatargen.online \
   -e GPU_CLASS_NAME=RTX-local-buffer \
   -e BUFFER_CAPACITY=1 \
   -e BUFFER_POLL_INTERVAL_SEC=5 \
@@ -131,12 +131,12 @@ docker exec buffer-orch-local-2 env | grep -E 'ORCHESTRATOR_BASE_URL|BUFFER_ORCH
 
 // turbo
 ```bash
-docker exec buffer-orch-local-2 curl -s https://api.avatargen.online/health
+docker exec buffer-orch-local-2 curl -s https://orch.avatargen.online/health
 ```
 
 Expected:
-- `BUFFER_ORCHESTRATOR_BASE_URL=https://api.avatargen.online`
-- `ORCHESTRATOR_BASE_URL=https://api.avatargen.online`
+- `BUFFER_ORCHESTRATOR_BASE_URL=https://orch.avatargen.online`
+- `ORCHESTRATOR_BASE_URL=https://orch.avatargen.online`
 - `{"status":"ok","salad_ok":true,...}`
 
 ---

@@ -1,0 +1,60 @@
+# ==============================================================================
+# MuseTalk Unified Polling Worker
+# ==============================================================================
+# Provider-agnostic worker that works on: Salad, OctaSpace, Vast.ai, TensorDock, Runpod
+# See UNIFIED_WORKER_SPEC.md for full specification.
+# ==============================================================================
+
+FROM explaindio/musetalk-queue-worker:progress AS base
+
+# The base image already has:
+# - CUDA, PyTorch, MuseTalk inference code
+# - uvicorn, httpx, FastAPI
+# - /app/worker_app/main.py with /generate endpoint
+# - Models and dependencies
+
+# Install requests (used by unified_worker.py if needed)
+RUN pip install --no-cache-dir requests
+
+# Copy unified worker script
+COPY unified_worker.py /app/unified_worker.py
+RUN chmod +x /app/unified_worker.py
+
+# Create startup script that runs both:
+# 1. uvicorn (to handle /generate requests)
+# 2. unified_worker.py (polling loop)
+COPY <<EOF /app/start_unified.sh
+#!/bin/bash
+set -e
+
+echo "Starting MuseTalk Unified Polling Worker..."
+echo "Worker ID: \${SALAD_MACHINE_ID:-\${VAST_CONTAINERLABEL:-\${WORKER_ID:-unknown}}}"
+echo "Provider: \${PROVIDER:-unknown}"
+echo "GPU Class: \${GPU_CLASS_NAME:-unknown}"
+echo "Orchestrator: \${ORCHESTRATOR_BASE_URL:-https://orch.avatargen.online}"
+
+# Start uvicorn in background to serve /generate endpoint
+uvicorn worker_app.main:app --host 0.0.0.0 --port 8000 &
+UVICORN_PID=\$!
+
+# Wait for uvicorn to be ready
+echo "Waiting for uvicorn to start..."
+for i in {1..30}; do
+    if curl -s http://localhost:8000/health > /dev/null 2>&1; then
+        echo "Uvicorn ready!"
+        break
+    fi
+    sleep 1
+done
+
+# Start unified worker polling loop
+python3 /app/unified_worker.py
+
+# If unified_worker.py exits, kill uvicorn
+kill \$UVICORN_PID 2>/dev/null || true
+EOF
+
+RUN chmod +x /app/start_unified.sh
+
+# Default entrypoint
+ENTRYPOINT ["/bin/bash", "/app/start_unified.sh"]

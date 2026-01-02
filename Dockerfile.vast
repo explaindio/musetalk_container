@@ -1,0 +1,16 @@
+# Dockerfile for Vast.ai "Push" Model Worker
+# This creates a separate image from the Salad "Pull" model worker
+
+# Start from the working Salad image (which already has MuseTalk set up)
+FROM explaindio/musetalk-queue-worker:progress
+
+# Install requests for the supervisor (if not already present)
+RUN pip install requests
+
+# Copy the supervisor script
+COPY worker_supervisor.py /app/worker_supervisor.py
+RUN chmod +x /app/worker_supervisor.py
+
+# Set Entrypoint
+# We MUST use the supervisor, not uvicorn directly
+CMD ["python3", "-u", "/app/worker_supervisor.py"]

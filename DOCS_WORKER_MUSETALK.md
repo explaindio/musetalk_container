@@ -43,7 +43,7 @@ Set `WORKER_MODE=buffer` OR set `BUFFER_WORKER_ID`.
 
 #### Common (Both Modes)
 ```bash
-ORCHESTRATOR_BASE_URL=https://api.avatargen.online
+ORCHESTRATOR_BASE_URL=https://orch.avatargen.online
 INTERNAL_API_KEY=<key>
 B2_KEY_ID=<key>
 B2_APP_KEY=<key>
@@ -79,7 +79,7 @@ GPU_CLASS_NAME=RTX 3090 (24 GB)
 docker run --gpus all \
   -e WORKER_MODE=buffer \
   -e GPU_CLASS="RTX 3080" \
-  -e ORCHESTRATOR_BASE_URL=https://api.avatargen.online \
+  -e ORCHESTRATOR_BASE_URL=https://orch.avatargen.online \
   -e INTERNAL_API_KEY=<key> \
   -e B2_KEY_ID=<key> \
   -e B2_APP_KEY=<key> \
@@ -92,7 +92,7 @@ docker run --gpus all \
 docker run --gpus all \
   -e BUFFER_WORKER_ID=buffer-local-1 \
   -e GPU_CLASS_NAME="RTX 3090 (24 GB)" \
-  -e ORCHESTRATOR_BASE_URL=https://api.avatargen.online \
+  -e ORCHESTRATOR_BASE_URL=https://orch.avatargen.online \
   -e INTERNAL_API_KEY=<key> \
   -e B2_KEY_ID=<key> \
   -e B2_APP_KEY=<key> \
