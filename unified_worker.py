@@ -201,11 +201,13 @@ def process_job(client: httpx.Client, job: Dict[str, Any]) -> bool:
 
         if gen_resp.status_code == 200:
             result = gen_resp.json()
-            if result.get("status") == "succeeded":
+            print(f"[process_job] /generate response: {result}", flush=True)
+            status = result.get("status")
+            if status == "succeeded" or status == "success":
                 print(f"[process_job] Job {job_id} succeeded", flush=True)
                 return True
             else:
-                error_msg = result.get("error", "Unknown error from /generate")
+                error_msg = result.get("error") or result.get("error_message") or "Unknown error from /generate"
                 print(f"[process_job] Job {job_id} failed: {error_msg}", flush=True)
                 report_progress(client, job_id, "failed", 0.0, "failed", error=error_msg)
                 return False

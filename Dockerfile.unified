@@ -19,6 +19,9 @@ RUN pip install --no-cache-dir requests
 COPY unified_worker.py /app/unified_worker.py
 RUN chmod +x /app/unified_worker.py
 
+# Copy worker app (overlaying base image version with local fixes)
+COPY worker_app /app/worker_app/
+
 # Create startup script that runs both:
 # 1. uvicorn (to handle /generate requests)
 # 2. unified_worker.py (polling loop)

@@ -583,6 +583,14 @@ def _upload_to_b2(file_path: str, job_id: Optional[str]) -> Tuple[str, str]:
             retryable=True
         )
 
+    if not os.path.exists(file_path):
+        raise ProcessingError(
+            stage="upload",
+            message=f"Output file not found: {file_path}",
+            details={"path": file_path},
+            retryable=False
+        )
+
     try:
         info = InMemoryAccountInfo()
         b2_api = B2Api(info)
@@ -590,9 +598,10 @@ def _upload_to_b2(file_path: str, job_id: Optional[str]) -> Tuple[str, str]:
         
         bucket = b2_api.get_bucket_by_name(bucket_name)
         
+        file_size = os.path.getsize(file_path)
         logger.info(
             "b2_upload_start",
-            extra={"bucket": bucket_name, "file": file_name, "size": os.path.getsize(file_path)}
+            extra={"bucket": bucket_name, "file": file_name, "size": file_size}
         )
         
         bucket.upload_local_file(
