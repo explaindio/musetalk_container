@@ -141,21 +141,26 @@ def report_progress(
     phase: str,
     metrics: Optional[Dict[str, Any]] = None,
     error: Optional[str] = None,
+    output_url: Optional[str] = None,
 ) -> bool:
     """
     Report job progress to orchestrator using existing endpoint.
     """
     try:
+        payload = {
+            "status": status,
+            "progress": progress,
+            "phase": phase,
+            "worker_id": WORKER_ID,
+            "metrics": metrics,
+            "error": error,
+        }
+        if output_url:
+            payload["output_url"] = output_url
+
         resp = client.post(
             f"{ORCH_URL}/internal/jobs/{job_id}/progress",
-            json={
-                "status": status,
-                "progress": progress,
-                "phase": phase,
-                "worker_id": WORKER_ID,
-                "metrics": metrics,
-                "error": error,
-            },
+            json=payload,
             headers=HEADERS,
             timeout=10.0,
         )
@@ -163,6 +168,8 @@ def report_progress(
     except Exception as e:
         print(f"[report_progress] Failed: {e}", flush=True)
         return False
+        
+
 
 
 # ==============================================================================
@@ -205,6 +212,12 @@ def process_job(client: httpx.Client, job: Dict[str, Any]) -> bool:
             status = result.get("status")
             if status == "succeeded" or status == "success":
                 print(f"[process_job] Job {job_id} succeeded", flush=True)
+                
+                # Report final success with output URL
+                output_url = result.get("output_url")
+                metrics = result.get("metrics")
+                report_progress(client, job_id, "succeeded", 1.0, "completed", metrics=metrics, output_url=output_url)
+                
                 return True
             else:
                 error_msg = result.get("error") or result.get("error_message") or "Unknown error from /generate"
