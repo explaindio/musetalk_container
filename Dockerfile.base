@@ -17,6 +17,7 @@ RUN apt-get update && apt-get install -y \
     ffmpeg \
     wget \
     curl \
+    time \
     && rm -rf /var/lib/apt/lists/*
 
 # Link python3 to python

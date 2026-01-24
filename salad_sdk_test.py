@@ -8,7 +8,7 @@ import time
 
 API_KEY = "salad_cloud_user_V3FL969HSJKYR990jjBNDzUej7oZNEEmfCWuu6SSPuJ1jiY4p"
 ORG_NAME = "explaindiolls"
-PROJECT_NAME = "testing-wanfast"
+PROJECT_NAME = "project2"
 
 # Initialize SDK
 sdk = SaladCloudSdk(

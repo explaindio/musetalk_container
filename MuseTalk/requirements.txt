@@ -24,3 +24,5 @@ httpx
 fastapi
 uvicorn
 b2sdk
+psutil
+speedtest-cli

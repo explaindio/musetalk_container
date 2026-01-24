@@ -16,6 +16,10 @@ import time
 import traceback
 import threading
 import httpx
+import psutil
+import speedtest
+import platform
+import math
 from typing import Any, Dict, Optional
 
 # ==============================================================================
@@ -47,6 +51,9 @@ B2_PREFIX = os.environ.get("B2_PREFIX", "")
 
 HEADERS = {"X-Internal-API-Key": API_KEY, "Content-Type": "application/json"}
 
+# Global system info cache
+SYSTEM_METRICS = {}
+
 # Global state for heartbeat thread
 WORKER_STATE = {
     "status": "idle",
@@ -58,6 +65,45 @@ STATE_LOCK = threading.Lock()
 # Heartbeat Thread
 # ==============================================================================
 
+def get_system_metrics():
+    """
+    Collects system metrics once on startup.
+    Includes: CPU, RAM, Disk, and Download Speed.
+    """
+    print("[system] Collecting system metrics...", flush=True)
+    metrics = {
+        "cpu_cores_physical": psutil.cpu_count(logical=False),
+        "cpu_cores_logical": psutil.cpu_count(logical=True),
+        "cpu_model": platform.processor(),
+    }
+
+    try:
+        mem = psutil.virtual_memory()
+        metrics["ram_total_gb"] = round(mem.total / (1024**3), 2)
+        metrics["ram_available_gb"] = round(mem.available / (1024**3), 2)
+    except Exception as e:
+        print(f"[system] Failed to get RAM info: {e}", flush=True)
+
+    try:
+        disk = psutil.disk_usage('/')
+        metrics["disk_total_gb"] = round(disk.total / (1024**3), 2)
+        metrics["disk_free_gb"] = round(disk.free / (1024**3), 2)
+    except Exception as e:
+        print(f"[system] Failed to get Disk info: {e}", flush=True)
+        
+    try:
+        print("[system] Running download speed test (this may take 10-20s)...", flush=True)
+        st = speedtest.Speedtest()
+        st.get_best_server()
+        download_speed = st.download() / 1_000_000  # Mbps
+        metrics["download_speed_mbps"] = round(download_speed, 2)
+        print(f"[system] Download speed: {metrics['download_speed_mbps']} Mbps", flush=True)
+    except Exception as e:
+        print(f"[system] Speedtest failed: {e}", flush=True)
+        metrics["download_speed_mbps"] = None
+
+    return metrics
+
 def heartbeat_loop():
     """
     Background thread that sends heartbeats every 5 seconds.
@@ -65,34 +111,47 @@ def heartbeat_loop():
     """
     print(f"[heartbeat] Thread started for {WORKER_ID}", flush=True)
     
-    with httpx.Client(timeout=10.0) as client:
-        while True:
-            try:
-                # Read current state
-                with STATE_LOCK:
-                    current_status = WORKER_STATE["status"]
-                    current_job = WORKER_STATE["current_job_id"]
+    while True:
+        try:
+            # Recreate client on connection errors
+            with httpx.Client(timeout=10.0, http2=False) as client:
+                while True:
+                    try:
+                        # Read current state
+                        with STATE_LOCK:
+                            current_status = WORKER_STATE["status"]
+                            current_job = WORKER_STATE["current_job_id"]
 
-                # Send heartbeat
-                resp = client.post(
-                    f"{ORCH_URL}/internal/main/workers/{WORKER_ID}/heartbeat",
-                    json={
-                        "status": current_status,
-                        "current_job_id": current_job,
-                        "provider": PROVIDER,
-                        "gpu_class": GPU_CLASS,
-                        "worker_type": WORKER_TYPE,
-                    },
-                    headers=HEADERS
-                )
-                
-                if resp.status_code != 200:
-                    print(f"[heartbeat] Warning: HTTP {resp.status_code} {resp.text[:100]}", flush=True)
-                
-            except Exception as e:
-                print(f"[heartbeat] Failed: {e}", flush=True)
-            
-            # Wait for next beat
+                        # Send heartbeat
+                        resp = client.post(
+                            f"{ORCH_URL}/internal/main/workers/{WORKER_ID}/heartbeat",
+                            json={
+                                "status": current_status,
+                                "current_job_id": current_job,
+                                "provider": PROVIDER,
+                                "gpu_class": GPU_CLASS,
+                                "worker_type": WORKER_TYPE,
+                                "system_info": SYSTEM_METRICS,
+                            },
+                            headers=HEADERS
+                        )
+                        
+                        if resp.status_code != 200:
+                            print(f"[heartbeat] Warning: HTTP {resp.status_code} {resp.text[:100]}", flush=True)
+                        
+                        # Wait for next beat
+                        time.sleep(5)
+                        
+                    except (httpx.RequestError, httpx.HTTPStatusError) as e:
+                        print(f"[heartbeat] Network/SSL Error: {e}. Reconnecting...", flush=True)
+                        break # Break inner loop to recreate client
+                        
+                    except Exception as e:
+                        print(f"[heartbeat] Failed: {e}", flush=True)
+                        time.sleep(5)
+                        
+        except Exception as e:
+            print(f"[heartbeat] Critical outer loop error: {e}", flush=True)
             time.sleep(5)
 
 # ==============================================================================
@@ -258,59 +317,72 @@ def main():
         print("[FATAL] INTERNAL_API_KEY not set!", flush=True)
         sys.exit(1)
 
+    # Collect system metrics before starting
+    global SYSTEM_METRICS
+    SYSTEM_METRICS = get_system_metrics()
+
     # Start heartbeat thread
     hb_thread = threading.Thread(target=heartbeat_loop, daemon=True)
     hb_thread.start()
 
-    # Use a persistent HTTP client for connection pooling
-    with httpx.Client() as client:
-        while True:
-            try:
-                # 1. Try to claim a job
-                job = claim_job(client)
+    while True:
+        try:
+            # Recreate client on errors to clear bad SSL states
+            with httpx.Client(http2=False, timeout=30.0) as client:
+                while True:
+                    try:
+                        # 1. Try to claim a job
+                        job = claim_job(client)
 
-                if job:
-                    job_id = job["musetalk_job_id"]
-                    print(f"[main] Claimed job: {job_id}", flush=True)
+                        if job:
+                            job_id = job["musetalk_job_id"]
+                            print(f"[main] Claimed job: {job_id}", flush=True)
 
-                    # Update state to Busy (heartbeat thread picks this up)
-                    with STATE_LOCK:
-                        WORKER_STATE["status"] = "busy"
-                        WORKER_STATE["current_job_id"] = job_id
+                            # Update state to Busy (heartbeat thread picks this up)
+                            with STATE_LOCK:
+                                WORKER_STATE["status"] = "busy"
+                                WORKER_STATE["current_job_id"] = job_id
 
-                    # Process the job (blocking)
-                    process_job(client, job)
+                            # Process the job (blocking)
+                            process_job(client, job)
 
-                    print(f"[main] Finished job: {job_id}", flush=True)
+                            print(f"[main] Finished job: {job_id}", flush=True)
 
-                    # Reset state to Idle
-                    with STATE_LOCK:
-                        WORKER_STATE["status"] = "idle"
-                        WORKER_STATE["current_job_id"] = None
+                            # Reset state to Idle
+                            with STATE_LOCK:
+                                WORKER_STATE["status"] = "idle"
+                                WORKER_STATE["current_job_id"] = None
 
-                else:
-                    # No job available
-                    with STATE_LOCK:
-                        # Ensure we are idle if we were somehow stuck
-                        if WORKER_STATE["status"] != "idle":
-                            WORKER_STATE["status"] = "idle"
-                            WORKER_STATE["current_job_id"] = None
+                        else:
+                            # No job available
+                            with STATE_LOCK:
+                                # Ensure we are idle if we were somehow stuck
+                                if WORKER_STATE["status"] != "idle":
+                                    WORKER_STATE["status"] = "idle"
+                                    WORKER_STATE["current_job_id"] = None
+                            
+                            time.sleep(POLL_INTERVAL)
+
+                    except (httpx.RequestError, httpx.HTTPStatusError) as e:
+                        print(f"[main] Network/SSL Error in loop: {e}. Reconnecting client...", flush=True)
+                        break  # Break inner loop to recreate client
                     
-                    time.sleep(POLL_INTERVAL)
+                    except KeyboardInterrupt:
+                        raise  # Let outer loop handle it (or just exit)
 
-            except KeyboardInterrupt:
-                print("\n[main] Shutting down...", flush=True)
-                break
-            except Exception as e:
-                print(f"[main] Unexpected error: {e}", flush=True)
-                print(traceback.format_exc(), flush=True)
+        except KeyboardInterrupt:
+            print("\n[main] Shutting down...", flush=True)
+            break
+        except Exception as e:
+            print(f"[main] Unexpected error in outer loop: {e}", flush=True)
+            print(traceback.format_exc(), flush=True)
+            
+            # Reset state on error
+            with STATE_LOCK:
+                WORKER_STATE["status"] = "idle"
+                WORKER_STATE["current_job_id"] = None
                 
-                # Reset state on error
-                with STATE_LOCK:
-                    WORKER_STATE["status"] = "idle"
-                    WORKER_STATE["current_job_id"] = None
-                    
-                time.sleep(POLL_INTERVAL)
+            time.sleep(POLL_INTERVAL)
 
 
 if __name__ == "__main__":

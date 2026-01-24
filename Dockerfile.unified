@@ -19,6 +19,10 @@ RUN pip install --no-cache-dir requests
 COPY unified_worker.py /app/unified_worker.py
 RUN chmod +x /app/unified_worker.py
 
+# Copy run_worker.sh (used by Vast.ai onstart)
+COPY run_worker.sh /app/run_worker.sh
+RUN chmod +x /app/run_worker.sh
+
 # Copy worker app (overlaying base image version with local fixes)
 COPY worker_app /app/worker_app/
 

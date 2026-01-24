@@ -40,6 +40,10 @@ def get_worker_id() -> str:
 
 CURRENT_WORKER_ID = get_worker_id()
 
+# Configuration from environment
+CONFIG_LABEL = os.environ.get("CONFIG_LABEL", "default")
+BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "8"))
+
 app = FastAPI(title="MuseTalk Worker", description="MuseTalk job processor for Salad Job Queues.")
 
 
@@ -139,6 +143,8 @@ def _send_progress_update(
         payload["error"] = error
     
     payload["worker_id"] = CURRENT_WORKER_ID
+    payload["config_label"] = CONFIG_LABEL
+    payload["batch_size"] = BATCH_SIZE
 
     headers = {"X-Internal-API-Key": internal_key}
 
@@ -682,6 +688,8 @@ def _run_musetalk_inference(
         "--version",
         "v15",
         "--use_float16",
+        "--batch_size",
+        str(BATCH_SIZE),
     ]
 
     logger.info(
