@@ -239,7 +239,7 @@ def main(args):
                 if args.version == "v15":
                     combine_frame = get_image(ori_frame, res_frame, [x1, y1, x2, y2], mode=args.parsing_mode, fp=fp)
                 else:
-                combine_frame = get_image(ori_frame, res_frame, [x1, y1, x2, y2], fp=fp)
+                    combine_frame = get_image(ori_frame, res_frame, [x1, y1, x2, y2], fp=fp)
                 cv2.imwrite(f"{result_img_save_path}/{str(i).zfill(8)}.jpg", combine_frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
 
             # Save prediction results

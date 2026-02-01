@@ -9,7 +9,7 @@
 #             Set to 'musetalk-base:local' if building from local Dockerfile.base in 2 steps.
 # ==============================================================================
 
-ARG BASE_IMAGE=explaindio/musetalk-queue-worker:progress
+ARG BASE_IMAGE=explaindio/musetalk-worker:unified-v1
 FROM ${BASE_IMAGE} AS base
 
 # Install requests (used by unified_worker.py if needed)
@@ -25,6 +25,9 @@ RUN chmod +x /app/run_worker.sh
 
 # Copy worker app (overlaying base image version with local fixes)
 COPY worker_app /app/worker_app/
+
+# Copy fixed inference script
+COPY MuseTalk/scripts/inference.py /app/scripts/inference.py
 
 # Create startup script that runs both:
 # 1. uvicorn (to handle /generate requests)

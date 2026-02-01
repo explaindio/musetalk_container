@@ -672,8 +672,6 @@ def _run_musetalk_inference(
     )
 
     cmd = [
-        "/usr/bin/time",
-        "-v",
         "python",
         "-m",
         "scripts.inference",
@@ -729,14 +727,15 @@ def _run_musetalk_inference(
     
     # Capture stderr for debugging
     stderr_lines = proc.stderr.splitlines() if proc.stderr else []
-    last_stderr = "\n".join(stderr_lines[-20:]) if stderr_lines else ""
+    last_stderr = "\n".join(stderr_lines) if stderr_lines else "" # Capture all stderr
 
     if proc.returncode != 0:
+        print(f"!!! INFERENCE FAILED (code {proc.returncode}) !!!\nSTDERR:\n{last_stderr}\n!!! END STDERR !!!", flush=True)
         logger.error(
             "inference_failed",
             extra={
                 "return_code": proc.returncode,
-                "stderr_tail": last_stderr,
+                "stderr_tail": last_stderr[-2000:] if len(last_stderr) > 2000 else last_stderr,
             },
         )
         

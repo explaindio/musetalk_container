@@ -284,7 +284,7 @@ def process_job(client: httpx.Client, job: Dict[str, Any]) -> bool:
                 report_progress(client, job_id, "failed", 0.0, "failed", error=error_msg)
                 return False
         else:
-            error_msg = f"HTTP {gen_resp.status_code}: {gen_resp.text[:200]}"
+            error_msg = f"HTTP {gen_resp.status_code}: {gen_resp.text[:10000]}"
             print(f"[process_job] Job {job_id} HTTP error: {error_msg}", flush=True)
             report_progress(client, job_id, "failed", 0.0, "failed", error=error_msg)
             return False

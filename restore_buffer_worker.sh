@@ -4,10 +4,11 @@
 
 docker run -d --gpus all --shm-size=8g \
   --restart=always \
-  -p 8000:8000 \
-  --env-file /home/a/musetalk/.env \
+  --network host \
+  --env-file /home/code10/musetalk/.env \
   --name buffer-local-unified-1 \
   -e WORKER_ID=buffer-local-unified-1 \
+  -e BUFFER_WORKER_ID=buffer-local-unified-1 \
   -e WORKER_TYPE=main \
   -e PROVIDER=local \
   -e GPU_CLASS_NAME=RTX-local-buffer \
