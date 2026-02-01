@@ -699,6 +699,8 @@ def _run_musetalk_inference(
         }
     )
 
+    print(f"DEBUG: Executing Inference Command: {cmd}", flush=True)
+
     start_time = time.time()
     try:
         proc = subprocess.run(

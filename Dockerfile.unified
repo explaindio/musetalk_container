@@ -13,7 +13,23 @@ ARG BASE_IMAGE=explaindio/musetalk-worker:unified-v1
 FROM ${BASE_IMAGE} AS base
 
 # Install requests (used by unified_worker.py if needed)
-RUN pip install --no-cache-dir requests
+# Fix dependency conflict: transformers needs huggingface-hub<1.0
+RUN pip install --no-cache-dir requests "huggingface-hub<1.0"
+
+# FORCE RE-INSTALL of PyTorch to match MuseTalk requirements (torch 2.0.1 + cu118)
+# The base image has a non-standard version (2.10.0) that breaks mmcv build.
+RUN pip uninstall -y torch torchvision torchaudio && \
+    pip install torch==2.0.1+cu118 torchvision==0.15.2+cu118 torchaudio==2.0.2+cu118 \
+    --index-url https://download.pytorch.org/whl/cu118
+
+# Install MMLab stack (mmpose, mmcv, mmdet)
+# Now that we have a standard torch version, mim should find pre-built wheels.
+RUN pip install --no-cache-dir -U openmim && \
+    mim install mmengine && \
+    mim install "mmcv==2.0.1" && \
+    mim install "mmdet==3.1.0" && \
+    pip install --no-build-isolation chumpy==0.70 && \
+    mim install "mmpose==1.1.0"
 
 # Copy unified worker script
 COPY unified_worker.py /app/unified_worker.py
