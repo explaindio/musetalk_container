@@ -140,7 +140,7 @@ def heartbeat_loop():
                             print(f"[heartbeat] Warning: HTTP {resp.status_code} {resp.text[:100]}", flush=True)
                         
                         # Wait for next beat
-                        time.sleep(5)
+                        time.sleep(10)
                         
                     except (httpx.RequestError, httpx.HTTPStatusError) as e:
                         print(f"[heartbeat] Network/SSL Error: {e}. Reconnecting...", flush=True)
@@ -148,11 +148,11 @@ def heartbeat_loop():
                         
                     except Exception as e:
                         print(f"[heartbeat] Failed: {e}", flush=True)
-                        time.sleep(5)
+                        time.sleep(10)
                         
         except Exception as e:
             print(f"[heartbeat] Critical outer loop error: {e}", flush=True)
-            time.sleep(5)
+            time.sleep(10)
 
 # ==============================================================================
 # API Calls (Main Thread)

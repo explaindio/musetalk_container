@@ -244,7 +244,7 @@ def main(args):
 
             # Save prediction results
             temp_vid_path = f"{temp_dir}/temp_{input_basename}_{audio_basename}.mp4"
-            cmd_img2video = f"ffmpeg -y -v warning -r {fps} -f image2 -i {result_img_save_path}/%08d.jpg -vcodec libx264 -vf format=yuv420p -crf 18 {temp_vid_path}"
+            cmd_img2video = f"ffmpeg -y -v warning -r {fps} -f image2 -i {result_img_save_path}/%08d.jpg -vcodec h264_nvenc -cq 19 -preset p4 -pix_fmt yuv420p {temp_vid_path}"
             print("Video generation command:", cmd_img2video)
             os.system(cmd_img2video)   
             
