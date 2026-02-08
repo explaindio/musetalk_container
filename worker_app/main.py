@@ -13,6 +13,7 @@ import uuid
 from datetime import datetime, timezone
 import socket
 from typing import Any, Dict, List, Optional, Tuple
+import concurrent.futures # Added for upload timeout
 
 import httpx
 from fastapi import FastAPI, HTTPException, status
@@ -610,10 +611,35 @@ def _upload_to_b2(file_path: str, job_id: Optional[str]) -> Tuple[str, str]:
             extra={"bucket": bucket_name, "file": file_name, "size": file_size}
         )
         
-        bucket.upload_local_file(
-            local_file=file_path,
-            file_name=file_name,
-        )
+        # Hard check for empty files
+        if file_size == 0:
+            raise ProcessingError(
+                stage="upload",
+                message="Output file is empty (0 bytes)",
+                details={"path": file_path},
+                retryable=False
+            )
+
+        print(f"[debug_upload] Starting upload of {file_path} ({file_size} bytes) to {bucket_name}/{file_name}", flush=True)
+
+        # Wrap synchronous B2 upload in a thread with 300s timeout
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+            future = executor.submit(
+                bucket.upload_local_file,
+                local_file=file_path,
+                file_name=file_name,
+            )
+            try:
+                future.result(timeout=300) # 5 minute timeout
+            except concurrent.futures.TimeoutError:
+                 raise ProcessingError(
+                    stage="upload",
+                    message="B2 upload timed out after 300s",
+                    details={"bucket": bucket_name, "file_name": file_name},
+                    retryable=True
+                )
+
+        print(f"[debug_upload] Upload finished successfully", flush=True)
         
         logger.info("b2_upload_success", extra={"file": file_name})
         return bucket_name, file_name
