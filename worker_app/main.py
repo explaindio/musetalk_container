@@ -236,6 +236,8 @@ async def _buffer_worker_loop() -> None:
                         musetalk_job_id = job["musetalk_job_id"]
                         job_ok = False
                         job_error: Optional[str] = None
+                        job_output_url: Optional[str] = None
+                        job_metrics: Optional[Dict[str, Any]] = None
                         try:
                             status = "busy"
                             last_error = None
@@ -255,7 +257,11 @@ async def _buffer_worker_loop() -> None:
                                 timeout=600.0,
                             )
                             gen_resp.raise_for_status()
-                            job_ok = True
+                            result = gen_resp.json()
+                            job_ok = result.get("status") in ("success", "succeeded")
+                            job_output_url = result.get("output_url")
+                            job_metrics = result.get("metrics")
+                            print(f"[buffer_worker] /generate result: status={result.get('status')}, output_url={job_output_url}", flush=True)
                         except Exception as job_exc:  # pragma: no cover - defensive
                             job_error = repr(job_exc)
                             last_error = job_error
@@ -270,13 +276,16 @@ async def _buffer_worker_loop() -> None:
                         # Always attempt to report final status, but do not
                         # treat reporting failures themselves as job failures.
                         try:
-                            print(f"[buffer_worker] Sending status update for {buffer_job_id}: {'succeeded' if job_ok else 'failed'}", flush=True)
+                            status_payload = {
+                                "status": "succeeded" if job_ok else "failed",
+                                "error": None if job_ok else job_error,
+                                "output_url": job_output_url if job_ok else None,
+                                "metrics": job_metrics if job_ok else None,
+                            }
+                            print(f"[buffer_worker] Sending status update for {buffer_job_id}: {status_payload}", flush=True)
                             status_resp = await client.post(
                                 f"{base_url.rstrip('/')}/internal/buffer/jobs/{buffer_job_id}/status",
-                                json={
-                                    "status": "succeeded" if job_ok else "failed",
-                                    "error": None if job_ok else job_error,
-                                },
+                                json=status_payload,
                                 headers=headers,
                             )
                             print(f"[buffer_worker] Status update response: {status_resp.status_code}", flush=True)
