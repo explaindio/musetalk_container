@@ -9,17 +9,5 @@ export INTERNAL_API_KEY="${INTERNAL_API_KEY:-}"
 export GPU_CLASS="${GPU_CLASS:-unknown}"
 EOF
 
-# Start the Salad HTTP Job Queue Worker in the background.
-/usr/local/bin/salad-http-job-queue-worker &
-WORKER_PID=$!
-
-# Start the FastAPI worker app (MuseTalk processor).
-uvicorn worker_app.main:app --host 0.0.0.0 --port 8000 &
-API_PID=$!
-
-# Wait for either process to exit.
-wait -n "$WORKER_PID" "$API_PID"
-
-# Exit with the status of the first process that exited.
-exit $?
-
+# Start the FastAPI worker app (MuseTalk processor) directly.
+exec uvicorn worker_app.main:app --host 0.0.0.0 --port 8000

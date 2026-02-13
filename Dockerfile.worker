@@ -32,19 +32,7 @@ RUN pip install --no-cache-dir -U openmim && \
 RUN pip install --no-build-isolation chumpy==0.70 && \
     mim install "mmpose==1.1.0"
 
-# Install Salad HTTP Job Queue Worker binary
-# Use an explicit versioned tarball and fail the build on any HTTP or checksum errors.
-RUN set -e; \
-    curl -fL \
-      https://github.com/SaladTechnologies/salad-cloud-job-queue-worker/releases/download/v0.5.0/salad-http-job-queue-worker_x86_64.tar.gz \
-      -o /tmp/salad-http-job-queue-worker_x86_64.tar.gz; \
-    echo 'd6d4485bc63d65e4c1322a49a7f94f6acb84b663bd7c0f80baa5be2095266585  /tmp/salad-http-job-queue-worker_x86_64.tar.gz' > /tmp/worker.sha256; \
-    sha256sum -c /tmp/worker.sha256; \
-    tar -xzf /tmp/salad-http-job-queue-worker_x86_64.tar.gz -C /usr/local/bin; \
-    rm /tmp/salad-http-job-queue-worker_x86_64.tar.gz /tmp/worker.sha256; \
-    chmod +x /usr/local/bin/salad-http-job-queue-worker
-
-# Simple entrypoint script to run both the queue worker and the FastAPI app
+# Entrypoint script to run the FastAPI worker app
 COPY run_worker.sh /app/run_worker.sh
 RUN chmod +x /app/run_worker.sh
 
