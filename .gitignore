@@ -30,3 +30,19 @@ checkpoints/
 
 # Keep source code
 !MuseTalk/
+
+# Temp files
+.venv_test/
+*.log
+*.pid
+*.csv
+*.html
+__pycache__/
+buffer_smoke_test_output.mp4
+peak_vram_docker.txt
+full_log*.txt
+job_error.txt
+*_output.txt
+sdk_dir.txt
+org_dir.txt
+salad_management_archive/
