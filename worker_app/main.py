@@ -44,6 +44,7 @@ CURRENT_WORKER_ID = get_worker_id()
 # Configuration from environment
 CONFIG_LABEL = os.environ.get("CONFIG_LABEL", "default")
 BATCH_SIZE = int(os.environ.get("BATCH_SIZE", "8"))
+USE_OPTIMIZED_INFERENCE = os.environ.get("USE_OPTIMIZED_INFERENCE", "false").lower() in ("1", "true", "yes")
 
 app = FastAPI(title="MuseTalk Worker", description="MuseTalk job processor for Salad Job Queues.")
 
@@ -709,7 +710,7 @@ def _run_musetalk_inference(
     cmd = [
         "python",
         "-m",
-        "scripts.inference",
+        "scripts.inference_optimized" if USE_OPTIMIZED_INFERENCE else "scripts.inference",
         "--inference_config",
         inference_config_path,
         "--result_dir",
@@ -847,7 +848,7 @@ def _run_musetalk_inference(
                     progress=max(last_reported_progress, 0.9),
                     phase="encoding",
                 )
-        elif line.startswith("Generation time (model inference loop):"):
+        elif line.startswith("Generation time (model inference loop):") or line.startswith("Generation + encoding time:"):
             try:
                 parts = line.split(": ", 1)[1].split()
                 gen_sec = float(parts[0])
