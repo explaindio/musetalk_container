@@ -20,7 +20,7 @@ The current working image supports: RTX 2070, 2080, 3060 Ti, 3090, 4090 (sm_75 �
 The new Blackwell image will support: RTX 5060 Ti, 5070, 5080, 5090 (sm_120).
 
 > [!IMPORTANT]
-> Both images use **identical worker code** (`main.py`, `unified_worker.py`, `inference.py`). Only the CUDA/PyTorch base layer changes.
+> Both images use **identical worker code** (`main.py`, `unified_worker.py`, `inference.py`, `inference_optimized.py`). Only the CUDA/PyTorch base layer changes.
 
 ---
 
@@ -79,6 +79,7 @@ musetalk_container/               ← Build context
 ├── MuseTalk/                     ← MuseTalk source code + model configs
 │   ├── requirements.txt          ← Python dependencies
 │   ├── scripts/inference.py      ← Inference script (our fixed version)
+│   ├── scripts/inference_optimized.py ← Optimized inference (pipe-based ffmpeg, ~11% faster)
 │   ├── download_weights.sh       ← Downloads ~15GB of model weights during build
 │   └── musetalk/                 ← Core MuseTalk Python package
 ├── worker_app/                   ← FastAPI worker application
@@ -162,8 +163,9 @@ COPY unified_worker.py /app/unified_worker.py
 COPY run_worker.sh /app/run_worker.sh
 RUN chmod +x /app/unified_worker.py /app/run_worker.sh
 
-# 9. Copy fixed inference script
+# 9. Copy fixed inference scripts
 COPY MuseTalk/scripts/inference.py /app/scripts/inference.py
+COPY MuseTalk/scripts/inference_optimized.py /app/scripts/inference_optimized.py
 
 # 10. Create startup script (identical to unified-v4)
 COPY <<EOF /app/start_unified.sh
@@ -346,6 +348,7 @@ curl -s -X POST \
         "ORCHESTRATOR_BASE_URL": "https://orch.avatargen.online",
         "POLL_INTERVAL_SEC": "10",
         "BATCH_SIZE": "4",
+        "USE_OPTIMIZED_INFERENCE": "true",
         "INTERNAL_API_KEY": "<INTERNAL_API_KEY>",
         "B2_KEY_ID": "<B2_KEY_ID>",
         "B2_APP_KEY": "<B2_APP_KEY>",
@@ -409,6 +412,7 @@ The worker communicates with the orchestrator at `https://orch.avatargen.online`
 | `B2_APP_KEY` | ✅ | Backblaze B2 app key |
 | `B2_BUCKET_NAME` | ✅ | `talking-avatar` |
 | `POLL_INTERVAL_SEC` | ❌ | Seconds between polls (default: `5`) |
+| `USE_OPTIMIZED_INFERENCE` | ❌ | Set to `true` to use pipe-based ffmpeg inference (~11% faster) |
 
 Worker ID is auto-detected: `SALAD_MACHINE_ID` → `VAST_CONTAINERLABEL` → `WORKER_ID` → random.
 
