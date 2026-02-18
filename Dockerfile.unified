@@ -44,6 +44,7 @@ COPY worker_app /app/worker_app/
 
 # Copy fixed inference script
 COPY MuseTalk/scripts/inference.py /app/scripts/inference.py
+COPY MuseTalk/scripts/inference_optimized.py /app/scripts/inference_optimized.py
 
 # Create startup script that runs both:
 # 1. uvicorn (to handle /generate requests)
