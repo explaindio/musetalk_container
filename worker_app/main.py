@@ -200,11 +200,13 @@ async def _buffer_worker_loop() -> None:
 
     headers = {"X-Internal-API-Key": internal_key}
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        status = "idle"
-        last_error: Optional[str] = None
-        while True:
-            try:
+    status = "idle"
+    last_error: Optional[str] = None
+    print(f"[buffer_hb] Buffer worker loop started for {worker_id}", flush=True)
+    while True:
+        try:
+            # Create a fresh client each cycle to avoid stale connection issues
+            async with httpx.AsyncClient(timeout=15.0) as client:
                 # Heartbeat
                 hb_body: Dict[str, Any] = {
                     "status": status,
@@ -217,10 +219,11 @@ async def _buffer_worker_loop() -> None:
                     json=hb_body,
                     headers=headers,
                 )
-                # If the orchestrator rejects the heartbeat (e.g. 401/404),
-                # surface it so we get a clear log line rather than silently
-                # continuing with no recorded heartbeat.
-                hb_resp.raise_for_status()
+                if hb_resp.status_code != 200:
+                    print(f"[buffer_hb] Warning: HTTP {hb_resp.status_code} {hb_resp.text[:100]}", flush=True)
+                else:
+                    print(f"[buffer_hb] Sent successfully. HTTP 200", flush=True)
+                    last_error = None  # Clear error on successful heartbeat
 
                 if status == "idle":
                     # Try to claim a job
@@ -302,16 +305,16 @@ async def _buffer_worker_loop() -> None:
                             )
                         finally:
                             status = "idle"
-            except Exception as exc:  # pragma: no cover - defensive
-                last_error = repr(exc)
-                tb = traceback.format_exc()
-                print(f"[buffer_worker_loop_error] {last_error}\n{tb}", flush=True)
-                logger.warning(
-                    "buffer_worker_loop_error",
-                    extra={"worker_id": worker_id, "error": last_error, "traceback": tb},
-                )
+        except Exception as exc:  # pragma: no cover - defensive
+            last_error = repr(exc)
+            tb = traceback.format_exc()
+            print(f"[buffer_hb] Error: {last_error}", flush=True)
+            logger.warning(
+                "buffer_worker_loop_error",
+                extra={"worker_id": worker_id, "error": last_error, "traceback": tb},
+            )
 
-            await asyncio.sleep(interval_sec)
+        await asyncio.sleep(interval_sec)
 
 
 async def _download_to_temp(
