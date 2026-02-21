@@ -1,0 +1,104 @@
+# ==============================================================================
+# MuseTalk Unified Worker — Clean Build (v6)
+# ==============================================================================
+# Single-stage build from CUDA base. No layer stacking.
+# Includes: PyTorch 2.0.1+cu118, MMLab stack, model weights, all worker code.
+#
+# Build:   docker build -f Dockerfile.unified-v6 -t explaindio/musetalk-worker:unified-v6 .
+# Push:    docker push explaindio/musetalk-worker:unified-v6
+# ==============================================================================
+
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
+
+# 1. System dependencies
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    python3-pip \
+    python3-dev \
+    git \
+    ffmpeg \
+    wget \
+    curl \
+    time \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/python3 /usr/bin/python
+
+WORKDIR /app
+
+# 2. Install PyTorch 2.0.1 + CUDA 11.8 (single install, no reinstall needed)
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir \
+    torch==2.0.1+cu118 \
+    torchvision==0.15.2+cu118 \
+    torchaudio==2.0.2+cu118 \
+    --index-url https://download.pytorch.org/whl/cu118
+
+# 3. Copy and install Python requirements
+COPY MuseTalk/requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r requirements.txt && \
+    pip install --no-cache-dir requests "huggingface-hub<1.0"
+
+# 4. Install MMLab stack
+RUN pip install --no-cache-dir -U openmim && \
+    mim install mmengine && \
+    mim install "mmcv==2.0.1" && \
+    mim install "mmdet==3.1.0" && \
+    pip install --no-build-isolation chumpy==0.70 && \
+    mim install "mmpose==1.1.0"
+
+# 5. Copy MuseTalk source code
+COPY MuseTalk/ /app/
+
+# 6. Download model weights (~8.7GB)
+#    Override HF_ENDPOINT to use real HuggingFace (not Chinese mirror)
+RUN chmod +x /app/download_weights.sh && \
+    HF_ENDPOINT=https://huggingface.co /app/download_weights.sh
+
+# 7. Copy worker application code
+COPY unified_worker.py /app/unified_worker.py
+COPY run_worker.sh /app/run_worker.sh
+COPY worker_app /app/worker_app/
+RUN chmod +x /app/unified_worker.py /app/run_worker.sh
+
+# 8. Copy inference scripts (original + optimized)
+COPY MuseTalk/scripts/inference.py /app/scripts/inference.py
+COPY MuseTalk/scripts/inference_optimized.py /app/scripts/inference_optimized.py
+
+# 9. Create startup script
+COPY <<EOF /app/start_unified.sh
+#!/bin/bash
+set -e
+
+echo "Starting MuseTalk Unified Polling Worker (v6)..."
+echo "Worker ID: \${SALAD_MACHINE_ID:-\${VAST_CONTAINERLABEL:-\${WORKER_ID:-unknown}}}"
+echo "Provider: \${PROVIDER:-unknown}"
+echo "GPU Class: \${GPU_CLASS_NAME:-unknown}"
+echo "Orchestrator: \${ORCHESTRATOR_BASE_URL:-https://orch.avatargen.online}"
+echo "Optimized Inference: \${USE_OPTIMIZED_INFERENCE:-false}"
+
+# Start uvicorn in background to serve /generate endpoint
+uvicorn worker_app.main:app --host 0.0.0.0 --port 8000 &
+UVICORN_PID=\$!
+
+# Wait for uvicorn to be ready
+echo "Waiting for uvicorn to start..."
+for i in {1..30}; do
+    if curl -s http://localhost:8000/hc > /dev/null 2>&1; then
+        echo "Uvicorn ready!"
+        break
+    fi
+    sleep 1
+done
+
+# Start unified worker polling loop
+python3 /app/unified_worker.py
+
+# If unified_worker.py exits, kill uvicorn
+kill \$UVICORN_PID 2>/dev/null || true
+EOF
+
+RUN chmod +x /app/start_unified.sh
+
+ENV PYTHONPATH=/app
+ENTRYPOINT ["/bin/bash", "/app/start_unified.sh"]
