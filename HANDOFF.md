@@ -2,8 +2,8 @@
 
 **Date:** March 5, 2026
 **Repository:** `https://github.com/explaindio/musetalk_container`
-**Docker Image:** `explaindio/musetalk-worker:unified-v6`
-**Digest:** `sha256:3131259df1cb61525e240bfee67be1ff851f155ea86720fb3fd83f92ecc89851`
+**Docker Image:** `explaindio/musetalk-worker:unified-v7`
+**Digest:** `sha256:8ceca4aa4d684958febd6bc2082c66fb48bfdd541771edacbc647e1f738845d3`
 
 ---
 
@@ -14,7 +14,7 @@
 ./setup_docker_gpu.sh
 
 # 2. Pull the image (~17.7 GB)
-docker pull explaindio/musetalk-worker:unified-v6
+docker pull explaindio/musetalk-worker:unified-v7
 
 # 3. Start the worker
 source .env && docker run -d --gpus all --shm-size=8g \
@@ -35,7 +35,7 @@ source .env && docker run -d --gpus all --shm-size=8g \
   -e CONFIG_LABEL=batch8-local-buffer \
   -e BATCH_SIZE=8 \
   -e USE_OPTIMIZED_INFERENCE=true \
-  explaindio/musetalk-worker:unified-v6
+  explaindio/musetalk-worker:unified-v7
 
 # 4. Verify
 docker logs -f buffer-local-unified-1
@@ -112,17 +112,18 @@ docker rm -f buffer-local-unified-1
 
 ---
 
-## 3. What's in unified-v6
+## 3. What's in unified-v7
 
 | Feature | Details |
 |---------|---------|
 | **Base** | `nvidia/cuda:11.8.0-runtime-ubuntu22.04` |
-| **Size** | 17.7 GB (down from 95.5 GB in v1-v5) |
+| **Size** | ~17.7 GB |
 | **Models** | Baked in (~8.7 GB weights) |
 | **Inference** | Optimized pipe-based FFmpeg encoding |
 | **Heartbeat** | Resilient — recreates HTTP client each cycle |
 | **Health** | `/hc` endpoint on port 8000 |
 | **Entrypoint** | `/bin/bash /app/start_unified.sh` |
+| **v7 fix** | Upgraded transformers ≥4.45.0 for huggingface-hub 1.x compat |
 
 ---
 
@@ -148,7 +149,8 @@ All stored in `.env` in the repo root. **Do not commit this file.**
 
 | File | Purpose |
 |------|---------|
-| `Dockerfile.unified-v6` | Clean single-stage build (current production) |
+| `Dockerfile.unified-v7` | Clean single-stage build (current production) |
+| `Dockerfile.unified-v6` | Previous production build |
 | `unified_worker.py` | Main worker polling loop + heartbeat |
 | `worker_app/main.py` | FastAPI app, buffer heartbeat loop, `/hc` endpoint |
 | `start_unified.sh` | Container entrypoint (uvicorn + worker) |
@@ -162,11 +164,11 @@ All stored in `.env` in the repo root. **Do not commit this file.**
 
 ```bash
 # From the repo root
-docker build -t explaindio/musetalk-worker:unified-v7 -f Dockerfile.unified-v6 .
+docker build -t explaindio/musetalk-worker:unified-v8 -f Dockerfile.unified-v7 .
 
 # Push to Docker Hub
 docker login -u $DOCKER_USERNAME -p $DOCKER_PAT
-docker push explaindio/musetalk-worker:unified-v7
+docker push explaindio/musetalk-worker:unified-v8
 ```
 
 ---
