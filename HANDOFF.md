@@ -3,7 +3,7 @@
 **Date:** March 5, 2026
 **Repository:** `https://github.com/explaindio/musetalk_container`
 **Docker Image:** `explaindio/musetalk-worker:unified-v7`
-**Digest:** `sha256:8ceca4aa4d684958febd6bc2082c66fb48bfdd541771edacbc647e1f738845d3`
+**Digest:** `sha256:56705c8ea07f70bc201a7ad1b9294913c2ea5c5753612120d8f1b68aeca62285`
 
 ---
 
