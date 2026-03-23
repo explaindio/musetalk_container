@@ -49,9 +49,11 @@ RUN pip install --no-cache-dir -U openmim && \
     pip install --no-build-isolation chumpy==0.70 && \
     mim install "mmpose==1.1.0"
 
-# 4b. Upgrade transformers to support huggingface-hub >= 1.0
-#     (MMLab pulls in huggingface-hub 1.x which breaks transformers < 4.45)
-RUN pip install --no-cache-dir "transformers>=4.45.0"
+# 4b. Upgrade transformers for huggingface-hub compatibility
+#     - transformers < 4.45 requires huggingface-hub < 1.0 (conflicts with MMLab)
+#     - transformers >= 5.0 has NameError: 'nn' not defined (breaks mmdet 3.1.0)
+#     - transformers 4.45-4.x is the sweet spot
+RUN pip install --no-cache-dir "transformers>=4.45.0,<5.0"
 
 # 5. Copy MuseTalk source code
 COPY MuseTalk/ /app/
