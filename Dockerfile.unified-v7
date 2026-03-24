@@ -64,6 +64,11 @@ COPY MuseTalk/ /app/
 RUN chmod +x /app/download_weights.sh && \
     HF_ENDPOINT=https://huggingface.co /app/download_weights.sh
 
+# 6b. Re-pin transformers + huggingface-hub after download_weights.sh
+#     download_weights.sh runs `pip install -U huggingface_hub[cli]` which
+#     upgrades huggingface-hub to 1.x, breaking transformers 4.45.2
+RUN pip install --no-cache-dir "transformers==4.45.2" "huggingface-hub>=0.23.2,<1.0"
+
 # 7. Copy worker application code
 COPY unified_worker.py /app/unified_worker.py
 COPY run_worker.sh /app/run_worker.sh
